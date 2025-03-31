@@ -1,2 +1,2 @@
 from .model_manager import ModelManager
-from .data_conector import DataConnector
+from .data_connector import DataConnector
