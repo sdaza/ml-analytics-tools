@@ -43,7 +43,7 @@ dc = DataConnector()
 ### Executing SQL Queries
 
 ```python
-query = "SELECT * FROM farming.health_score_modelling_churn_base"
+query = "SELECT * FROM my_table.test"
 df = dc.sql(query)
 print(df.head())
 ```
@@ -51,21 +51,21 @@ print(df.head())
 ### Saving Data to Reshift
 
 ```python
-dc.save_table_redshift(df, table_name="test", schema="test_bi")
+dc.save_table_redshift(df, table_name="test", schema="test")
 ```
 
 ### Saving Data to S3
 
 ```python
 data_connector.save_dataframe_to_s3(
-    directory='ml-bi-projects/test', filename='test', file_format='parquet')
+    directory='my-project/test', filename='test', file_format='parquet')
 ```
 
 ### Listing and delete S3 files
 
 ```python
-dc.list_s3_files(prefix='ml-bi-projects')
-dc.delete_s3_file(key='ml-bi-projects/test/test.parquet')
+dc.list_s3_files(prefix='my-project')
+dc.delete_s3_file(key='my-project/test/test.parquet')
 ```
 
 ## Model Manager
@@ -83,7 +83,7 @@ model_manager = ModelManager(
     task="classification",
     project="Project XYZ",
     description="An example classification model",
-    team="bi",
+    team="my-team",
     user="sebastian.daza"
 )
 ```
