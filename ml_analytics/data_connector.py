@@ -307,35 +307,6 @@ class DataConnector:
             self.logger.error(f"Error initializing S3 client: {e}")
             raise
 
-    def create_local_file_path(self, relative_path, base_dir="."):
-        """
-        Generate a local file path by combining a base directory and a relative path.
-
-        Parameters
-        ----------
-        relative_path : str
-            The relative path to be appended to the base directory.
-        base_dir : str, optional
-            The base directory to use. Defaults to the current directory.
-
-        Returns
-        -------
-        str
-            The full file path as a string.
-
-        Notes
-        -----
-        If the special variable '__file__' is available, this function will use its
-        directory location as the base directory, otherwise it will use the current
-        working directory.
-        """
-        if '__file__' in globals():
-            base_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-        else:
-            base_dir = os.path.abspath(os.path.join(os.getcwd(), ''))
-        file_path = os.path.join(base_dir, relative_path)
-        return file_path
-
     def create_redshift_table_from_s3(self, s3_file_path, redshift_table):
         """Copy data from S3 into a Redshift table using Parquet"""
 
