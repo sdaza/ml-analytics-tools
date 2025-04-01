@@ -3,7 +3,7 @@
 
 ## Overview
 
-The ML Analytics Utilities package offers tools to facilitate data processing and database connections, and manage the lifecycle of machine learning models with MLflow. The idea is to make our work easily reproducible. It includes features for registering, logging, and deleting models, simplifying managing machine learning models in a production environment. 
+The ML Analytics Utilities package offers tools to facilitate data processing and database connections, and manage the lifecycle of machine learning models with MLflow. The idea is to make our work easily reproducible. It includes features for registering, logging, and deleting models, simplifying managing machine learning models in a production environment.
 
 It also includes functionalities for executing SQL queries, saving data to Redshift and S3, and managing S3 files.
 
@@ -26,7 +26,7 @@ It also includes functionalities for executing SQL queries, saving data to Redsh
 
 ### Setup
 
-Ensure that your environment variables are set in a `.env` file. This file should include your database and AWS credentials, and environment variables for MLflow tracking. You can use the `.env_template` file as reference.
+Ensure that your environment variables are set in a `.env` file. This file should include your database and AWS credentials, and environment variables for MLflow tracking.
 
 ## Data connector
 
