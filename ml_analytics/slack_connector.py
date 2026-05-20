@@ -27,7 +27,7 @@ class SlackConnector:
         token_path: str | Path = None,
         log_level: str = "INFO",
         return_response: bool = False,
-        scope: str = "ai-data-products",
+        scope: str = "ml",
     ):
         """
         Initialize the Slack connector.
@@ -47,8 +47,8 @@ class SlackConnector:
             If True, methods return full API response. If False, returns None for cleaner output.
             Default is False.
         scope : str, optional
-            Scope for SecretProvider mounted secrets (e.g., '/mnt/{scope}/SLACK_BOT_TOKEN').
-            Default is "ai-data-products". Used in production containerized environments.
+            Scope for mounted secrets (e.g., '/mnt/{scope}/SLACK_BOT_TOKEN').
+            Default is "ml".
 
         Examples
         --------
@@ -62,7 +62,7 @@ class SlackConnector:
         >>> # Using token file
         >>> slack = SlackConnector(token_path="slack_token.txt")
         >>>
-        >>> # Using production mounted secrets with custom scope
+        >>> # Using mounted secrets with a custom scope
         >>> slack = SlackConnector(scope="custom-scope")
         """
         self._logger = get_logger("SlackConnector")
@@ -87,7 +87,7 @@ class SlackConnector:
                         "  2. Pass 'token' parameter\n"
                         "  3. Pass 'token_path' parameter\n"
                         "  4. Create 'slack_token.txt' in current directory\n"
-                        "  5. Mount secret at /mnt/{scope}/SLACK_BOT_TOKEN in production",
+                        "  5. Mount secret at /mnt/<scope>/SLACK_BOT_TOKEN",
                     )
 
         if token_path is not None:

@@ -70,10 +70,10 @@ class TestGSheetCredentialLoading:
             mock_get_cred.return_value = credentials_json_str
 
             # Initialize GSheet connector
-            gsheet = GSheet(scope="ai-data-products")
+            gsheet = GSheet(scope="ml")
 
             # Verify get_credential_value was called with correct parameters
-            mock_get_cred.assert_called_once_with("GOOGLE_CREDENTIALS", scope="ai-data-products")
+            mock_get_cred.assert_called_once_with("GOOGLE_CREDENTIALS", scope="ml")
 
             # Verify service account credentials were created from the JSON
             mock_google_service_account.from_service_account_info.assert_called_once()
@@ -88,7 +88,7 @@ class TestGSheetCredentialLoading:
     ):
         """Test assembling credentials from individual vault secrets."""
 
-        def mock_get_credential_side_effect(name, scope="ai-data-products"):
+        def mock_get_credential_side_effect(name, scope="ml"):
             """Mock individual credential components from vault."""
             credentials_map = {
                 "GOOGLE_CREDENTIALS": None,  # Simulate GOOGLE_CREDENTIALS not available
@@ -113,7 +113,7 @@ class TestGSheetCredentialLoading:
             mock_get_cred.side_effect = mock_get_credential_side_effect
 
             # Initialize GSheet connector
-            _ = GSheet(scope="ai-data-products")
+            _ = GSheet(scope="ml")
 
             # Verify get_credential_value was called for GOOGLE_CREDENTIALS first
             assert mock_get_cred.call_count >= 7  # GOOGLE_CREDENTIALS + 6 components
@@ -167,7 +167,7 @@ class TestGSheetCredentialLoading:
     ):
         """Test fallback to file-based credentials when vault secrets unavailable."""
 
-        def mock_get_credential_side_effect(name, scope="ai-data-products"):
+        def mock_get_credential_side_effect(name, scope="ml"):
             """Simulate vault credentials not available."""
             raise Exception(f"Credential {name} not found in vault")
 
@@ -191,7 +191,7 @@ class TestGSheetCredentialLoading:
     def test_error_when_no_credentials_available(self, mock_google_service_account, mock_google_api_services):
         """Test error handling when no credentials are available anywhere."""
 
-        def mock_get_credential_side_effect(name, scope="ai-data-products"):
+        def mock_get_credential_side_effect(name, scope="ml"):
             """Simulate vault credentials not available."""
             raise Exception(f"Credential {name} not found")
 
@@ -214,7 +214,7 @@ class TestGSheetCredentialLoading:
     def test_private_key_newline_conversion(self, mock_google_service_account, mock_google_api_services):
         """Test that escaped newlines in private key are correctly converted."""
 
-        def mock_get_credential_side_effect(name, scope="ai-data-products"):
+        def mock_get_credential_side_effect(name, scope="ml"):
             """Return credentials with escaped newlines in private key."""
             credentials_map = {
                 "GOOGLE_CREDENTIALS": None,
@@ -292,7 +292,7 @@ class TestGSheetCredentialPriority:
         """Test that single JSON vault credential is tried before individual components."""
         credentials_json_str = json.dumps(sample_credentials_dict)
 
-        def mock_get_credential_side_effect(name, scope="ai-data-products"):
+        def mock_get_credential_side_effect(name, scope="ml"):
             """Return single JSON on first call for GOOGLE_CREDENTIALS."""
             if name == "GOOGLE_CREDENTIALS":
                 return credentials_json_str
@@ -307,14 +307,14 @@ class TestGSheetCredentialPriority:
 
             # Verify only GOOGLE_CREDENTIALS was requested, not individual components
             assert mock_get_cred.call_count == 1
-            mock_get_cred.assert_called_once_with("GOOGLE_CREDENTIALS", scope="ai-data-products")
+            mock_get_cred.assert_called_once_with("GOOGLE_CREDENTIALS", scope="ml")
 
     def test_components_before_file_fallback(self, mock_google_service_account, mock_google_api_services):
         """Test that individual vault components are tried before file fallback."""
 
         call_sequence = []
 
-        def mock_get_credential_side_effect(name, scope="ai-data-products"):
+        def mock_get_credential_side_effect(name, scope="ml"):
             """Track call sequence and return component credentials."""
             call_sequence.append(name)
 
@@ -355,7 +355,7 @@ class TestGSheetCredentialAssembly:
     ):
         """Test that assembled credentials contain all required Google service account fields."""
 
-        def mock_get_credential_side_effect(name, scope="ai-data-products"):
+        def mock_get_credential_side_effect(name, scope="ml"):
             credentials_map = {
                 "GOOGLE_PROJECT_ID": "test-project-123",
                 "GOOGLE_API_PKEY_ID": "key-id-456",
@@ -408,7 +408,7 @@ class TestGSheetCredentialAssembly:
     def test_partial_component_credentials_returns_none(self, mock_google_service_account, mock_google_api_services):
         """Test that missing any component credential returns None and falls back to file."""
 
-        def mock_get_credential_side_effect(name, scope="ai-data-products"):
+        def mock_get_credential_side_effect(name, scope="ml"):
             """Missing GOOGLE_CLIENT_ID to simulate partial credentials."""
             credentials_map = {
                 "GOOGLE_PROJECT_ID": "test-project",
@@ -449,7 +449,7 @@ class TestGSheetAutofitColumns:
         credentials_json_str = json.dumps(sample_credentials_dict)
         with patch("ml_analytics.gsheet_connector.get_credential_value") as mock_get_cred:
             mock_get_cred.return_value = credentials_json_str
-            gsheet = GSheet(scope="ai-data-products")
+            gsheet = GSheet(scope="ml")
         return gsheet
 
     def _mock_sheet_with_column_metadata(self, mock_sheets, column_widths=None):
@@ -658,7 +658,7 @@ class TestGSheetFormatColumnsAsPercent:
         credentials_json_str = json.dumps(sample_credentials_dict)
         with patch("ml_analytics.gsheet_connector.get_credential_value") as mock_get_cred:
             mock_get_cred.return_value = credentials_json_str
-            gsheet = GSheet(scope="ai-data-products")
+            gsheet = GSheet(scope="ml")
         return gsheet
 
     def _setup_mocks(self, mock_sheets, sheet_id=0, sheet_title="Sheet1", header=None):

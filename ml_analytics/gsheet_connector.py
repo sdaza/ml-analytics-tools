@@ -139,7 +139,7 @@ class GSheet:
         credentials_json: dict = None,
         scopes: list[str] = None,
         log_level: str = "INFO",
-        scope: str = "ai-data-products",
+        scope: str = "ml",
         spreadsheet_id: str = None,
     ):
         """
@@ -157,8 +157,8 @@ class GSheet:
         log_level : str, optional
             Logging level. Default is "INFO".
         scope : str, optional
-            Scope for SecretProvider mounted secrets (e.g., '/mnt/{scope}/GOOGLE_CREDENTIALS').
-            Default is "ai-data-products". Used in production containerized environments.
+            Scope for mounted secrets (e.g., '/mnt/{scope}/GOOGLE_CREDENTIALS').
+            Default is "ml".
         spreadsheet_id : str, optional
             Default spreadsheet ID used by any method that accepts a ``spreadsheet_id``
             argument. A ``spreadsheet_id`` passed to an individual method call always
@@ -177,7 +177,7 @@ class GSheet:
         >>> # Auto-load from default location
         >>> gsheet = GSheet()  # Looks for gsheet_credentials.json
         >>>
-        >>> # Using production mounted secrets with custom scope
+        >>> # Using mounted secrets with a custom scope
         >>> gsheet = GSheet(scope="custom-scope")
         >>>
         >>> # Bind a default spreadsheet ID so later calls can omit it
