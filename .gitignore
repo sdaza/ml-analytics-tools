@@ -9,5 +9,7 @@ __pycache__/
 tests/interactive.py
 .idea
 *.json
+!release-please-config.json
+!.release-please-manifest.json
 *.png
 /tasks
