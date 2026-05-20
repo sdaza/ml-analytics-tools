@@ -2,6 +2,7 @@
 
 [![CI](https://github.com/sdaza/ml-analytics-tools/actions/workflows/ci.yml/badge.svg)](https://github.com/sdaza/ml-analytics-tools/actions/workflows/ci.yml)
 [![GitHub release](https://img.shields.io/github/v/release/sdaza/ml-analytics-tools)](https://github.com/sdaza/ml-analytics-tools/releases)
+[![PyPI](https://img.shields.io/pypi/v/ml-analytics-tools.svg)](https://pypi.org/project/ml-analytics-tools/)
 [![Python 3.11+](https://img.shields.io/badge/python-3.11%2B-blue.svg)](https://www.python.org/downloads/)
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 
