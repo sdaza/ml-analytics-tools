@@ -1,5 +1,13 @@
 .venv
 .env
+.vscode
 .DS_Store
+mlruns/
 .python-version
-uv.lock
+ml_analytics_tools.egg-info
+__pycache__/
+tests/interactive.py
+.idea
+*.json
+*.png
+/tasks

@@ -3,10 +3,145 @@ name = "ml-analytics-tools"
 version = "0.0.1"
 description = "Tools for ML projects and data management"
 readme = "README.md"
-requires-python = ">=3.10"
+requires-python = ">=3.11"
 dependencies = [
     "boto3>=1.37.24",
-    "logging>=0.4.9.6",
-    "mlflow>=2.21.2",
-    "redshift-connector>=2.1.5",
+    "catboost>=1.2.8",
+    "ddtrace>=3.4.1",
+    "dotenv>=0.9.9",
+    "duckdb>=1.4.1",
+    "google-api-python-client>=2.150.0",
+    "google-auth>=2.35.0",
+    "google-auth-httplib2>=0.2.0",
+    "google-auth-oauthlib>=1.2.0",
+    "ipykernel>=6.29.5",
+    "lifelines>=0.30.3",
+    "mlflow==3.10.1",
+    "mlflow[auth]==3.10.1",
+    "pip>=25.3",
+    "polars==1.30.0",
+    "pytest>=8.3.5",
+    "pyyaml>=6.0.2",
+    "redshift-connector>=2.1.9",
+    "ruff>=0.11.4",
+    "schedule>=1.2.2",
+    "scikit-learn==1.5.2",
+    "seaborn>=0.13.2",
+    "setuptools>=42.0.0",
+    "shap>=0.47.2",
+    "slack-sdk>=3.27.0",
+]
+
+[project.scripts]
+ml-analytics-auth = "ml_analytics.cli:aws_auth_command"
+ml-analytics-sso = "ml_analytics.cli:aws_sso_command"
+ml-analytics-tunnel = "ml_analytics.tunnel_manager:main"
+
+[dependency-groups]
+dev = [
+    "pytest>=8.3.4",
+    "mypy>=1.14.1",
+    "ruff>=0.9.4",
+]
+
+[tool.ruff]
+exclude = [
+    ".bzr",
+    ".direnv",
+    ".eggs",
+    ".git",
+    ".git-rewrite",
+    ".hg",
+    ".ipynb",
+    ".ipynb_checkpoints",
+    ".mypy_cache",
+    ".nox",
+    ".pants.d",
+    ".pyenv",
+    ".pytest_cache",
+    ".pytype",
+    ".ruff_cache",
+    ".svn",
+    ".tox",
+    ".venv",
+    ".vscode",
+    "__pypackages__",
+    "_build",
+    "buck-out",
+    "build",
+    "dist",
+    "node_modules",
+    "site-packages",
+    "venv",
+]
+line-length = 120
+indent-width = 4
+#target-version = "py313" TODO: parametrize
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B"]
+ignore = [
+    "INP001"  # File `docs/conf.py` is part of an implicit namespace package. Add an `__init__.py`.
+]
+fixable = ["ALL"]
+unfixable = []
+dummy-variable-rgx = "^(_+|(_+[a-zA-Z0-9_]*[a-zA-Z0-9]+?))$"
+
+[tool.ruff.format]
+quote-style = "double"
+indent-style = "space"
+skip-magic-trailing-comma = false
+line-ending = "auto"
+docstring-code-format = false
+docstring-code-line-length = "dynamic"
+
+[build-system]
+requires = ["setuptools>=42", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools]
+packages = { find = { include = ["ml_analytics"], exclude = ["img", "img.*"] } }
+
+[tool.mypy]
+python_version = "3.11"
+show_error_codes = true
+show_error_context = true
+pretty = true
+warn_unused_ignores = true
+warn_unused_configs = true
+ignore_missing_imports = true
+warn_unreachable = true
+warn_redundant_casts = true
+check_untyped_defs = true
+disallow_untyped_calls = true
+disallow_incomplete_defs = true
+disallow_any_generics = true
+disallow_subclassing_any = false
+exclude = [
+    ".bzr",
+    ".direnv",
+    ".eggs",
+    ".git",
+    ".git-rewrite",
+    ".hg",
+    ".ipynb_checkpoints",
+    ".mypy_cache",
+    ".nox",
+    ".pants.d",
+    ".pyenv",
+    ".pytest_cache",
+    ".pytype",
+    ".ruff_cache",
+    ".svn",
+    ".tox",
+    ".venv",
+    ".vscode",
+    "__pypackages__",
+    "_build",
+    "buck-out",
+    "build",
+    "dist",
+    "node_modules",
+    "site-packages",
+    "venv",
 ]
