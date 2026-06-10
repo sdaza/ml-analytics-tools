@@ -15,7 +15,7 @@ arguments.
 
 ## What Is Included
 
-- `DataConnector`: run Redshift SQL, load SQL files, unload/load data through S3, and create Redshift tables from DataFrames.
+- `DataConnector`: run Redshift or Snowflake SQL, load SQL files, unload/load data through S3, and create Redshift tables from DataFrames.
 - `S3Connector`: read, write, list, delete, and query S3 data with DuckDB.
 - `GSheet`: read, write, share, and export Google Sheets data.
 - `SlackConnector`: send messages, upload files, and manage simple Slack interactions.
@@ -55,6 +55,18 @@ BI_REDSHIFT_DB=analytics
 BI_REDSHIFT_USER=analytics_user
 BI_REDSHIFT_PASSWORD=secret
 BI_REDSHIFT_PORT=5439
+
+# Snowflake
+SNOWFLAKE_USER=your.name@example.com
+SNOWFLAKE_ACCOUNT=your-account
+SNOWFLAKE_WAREHOUSE=ANALYTICS_S_WH
+SNOWFLAKE_DATABASE=ANALYTICS_DB
+SNOWFLAKE_SCHEMA=PUBLIC
+SNOWFLAKE_AUTHENTICATOR=externalbrowser
+
+# Browser-free Snowflake auth for local or Databricks jobs
+SNOWFLAKE_PRIVATE_KEY_PATH=~/.snowflake/rsa_key.p8
+SNOWFLAKE_PRIVATE_KEY_PASSPHRASE=secret
 
 # S3
 ML_ANALYTICS_S3_BUCKET=my-analytics-bucket
@@ -105,6 +117,41 @@ dc = DataConnector()
 
 df = dc.sql("SELECT * FROM analytics.customer_features LIMIT 100")
 df_polars = dc.sql("queries/features.sql", format="polars", country="es")
+```
+
+### Query Snowflake
+
+```python
+from ml_analytics import DataConnector
+
+dc = DataConnector(engine="snowflake")
+
+df = dc.sql("SELECT 1 AS col_1")
+```
+
+For local interactive work, `SNOWFLAKE_AUTHENTICATOR=externalbrowser` is supported.
+For Databricks and Spark jobs, use key-pair auth instead. The connector reads
+default Databricks personal-scope secrets automatically:
+
+```bash
+databricks secrets put-secret user-your.name@example.com snowflake_key --bytes-value """$(cat rsa_key.p8)"""
+databricks secrets put-secret user-your.name@example.com snowflake_key_pass --string-value """<password>"""
+```
+
+Then build Spark connector options without opening a browser:
+
+```python
+from ml_analytics import DataConnector
+
+dc = DataConnector(engine="snowflake", secret_scope="user-your.name@example.com")
+options = dc.snowflake_spark_options()
+
+df = (
+    spark.read.format("net.snowflake.spark.snowflake")
+    .options(**options)
+    .option("query", "SELECT 1 AS col_1")
+    .load()
+)
 ```
 
 ### Create A Redshift Table From A DataFrame
