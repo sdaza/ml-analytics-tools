@@ -7,8 +7,19 @@ from pathlib import Path
 from unittest.mock import MagicMock, patch
 
 import pytest
+from google.oauth2.credentials import Credentials as RealOAuthCredentials
 
 from ml_analytics.gsheet_connector import GSheet
+
+
+@pytest.fixture(autouse=True)
+def clear_oauth_env_vars(monkeypatch):
+    """Remove OAuth env vars from every test so service-account tests are not disturbed.
+
+    The TestGSheetOAuth helpers call _set_oauth_env() to re-add them explicitly.
+    """
+    for var in ("GOOGLE_OAUTH_CLIENT_ID", "GOOGLE_OAUTH_CLIENT_SECRET", "GOOGLE_CLOUD_PROJECT"):
+        monkeypatch.delenv(var, raising=False)
 
 
 @pytest.fixture
@@ -922,6 +933,92 @@ class TestGSheetFormatColumnsAsPercent:
         body = self._get_batch_update_body(mock_sheets)
         fmt = body["requests"][0]["repeatCell"]["cell"]["userEnteredFormat"]["numberFormat"]
         assert fmt == {"type": "DATE_TIME", "pattern": "yyyy-mm-dd hh:mm:ss"}
+
+
+class TestGSheetOAuth:
+    """Test OAuth installed-app authentication path."""
+
+    def _set_oauth_env(self, monkeypatch, token_path):
+        # Ensure no service-account creds are picked up first.
+        for var in (
+            "GOOGLE_CREDENTIALS",
+            "GOOGLE_PROJECT_ID",
+            "GOOGLE_API_PKEY_ID",
+            "GOOGLE_API_PKEY",
+            "GOOGLE_CLIENT_EMAIL",
+            "GOOGLE_CLIENT_ID",
+            "GOOGLE_CERT_URL",
+        ):
+            monkeypatch.delenv(var, raising=False)
+        monkeypatch.setenv("GOOGLE_OAUTH_CLIENT_ID", "cid.apps.googleusercontent.com")
+        monkeypatch.setenv("GOOGLE_OAUTH_CLIENT_SECRET", "GOCSPX-secret")
+        monkeypatch.setenv("GOOGLE_CLOUD_PROJECT", "preply-gworkspace-cli")
+        monkeypatch.setenv("GSHEET_TOKEN_PATH", str(token_path))
+
+    def test_oauth_runs_flow_when_no_token(self, monkeypatch, tmp_path, mock_google_api_services):
+        # Token lives under a not-yet-existing parent dir to exercise mkdir.
+        token_file = tmp_path / "sub" / "token.json"
+        self._set_oauth_env(monkeypatch, token_file)
+
+        mock_creds = MagicMock(spec=RealOAuthCredentials)
+        mock_creds.to_json.return_value = '{"new": true}'
+
+        with patch("ml_analytics.gsheet_connector.InstalledAppFlow") as mock_flow, \
+             patch("ml_analytics.gsheet_connector.OAuthCredentials") as mock_oauth:
+            flow_instance = MagicMock()
+            flow_instance.run_local_server.return_value = mock_creds
+            mock_flow.from_client_config.return_value = flow_instance
+
+            gsheet = GSheet()
+
+            mock_flow.from_client_config.assert_called_once()
+            flow_instance.run_local_server.assert_called_once_with(port=0)
+            mock_oauth.from_authorized_user_file.assert_not_called()
+            assert gsheet.credentials is mock_creds
+            assert token_file.exists()
+            assert token_file.read_text() == '{"new": true}'
+
+    def test_oauth_uses_valid_cached_token(self, monkeypatch, tmp_path, mock_google_api_services):
+        token_file = tmp_path / "token.json"
+        token_file.write_text("{}")  # file must exist so the cache branch is taken
+        self._set_oauth_env(monkeypatch, token_file)
+
+        mock_creds = MagicMock(spec=RealOAuthCredentials)
+        mock_creds.valid = True
+
+        with patch("ml_analytics.gsheet_connector.OAuthCredentials") as mock_oauth, \
+             patch("ml_analytics.gsheet_connector.InstalledAppFlow") as mock_flow:
+            mock_oauth.from_authorized_user_file.return_value = mock_creds
+
+            gsheet = GSheet()
+
+            mock_oauth.from_authorized_user_file.assert_called_once_with(str(token_file), gsheet.scopes)
+            mock_flow.from_client_config.assert_not_called()
+            mock_creds.refresh.assert_not_called()
+            assert gsheet.credentials is mock_creds
+
+    def test_oauth_refreshes_expired_token(self, monkeypatch, tmp_path, mock_google_api_services):
+        token_file = tmp_path / "token.json"
+        token_file.write_text("{}")
+        self._set_oauth_env(monkeypatch, token_file)
+
+        mock_creds = MagicMock(spec=RealOAuthCredentials)
+        mock_creds.valid = False
+        mock_creds.expired = True
+        mock_creds.refresh_token = "refresh-token-value"
+        mock_creds.to_json.return_value = '{"refreshed": true}'
+
+        with patch("ml_analytics.gsheet_connector.OAuthCredentials") as mock_oauth, \
+             patch("ml_analytics.gsheet_connector.InstalledAppFlow") as mock_flow, \
+             patch("ml_analytics.gsheet_connector.Request") as _mock_request:
+            mock_oauth.from_authorized_user_file.return_value = mock_creds
+
+            gsheet = GSheet()
+
+            mock_creds.refresh.assert_called_once()
+            mock_flow.from_client_config.assert_not_called()
+            assert gsheet.credentials is mock_creds
+            assert token_file.read_text() == '{"refreshed": true}'
 
 
 class TestGSheetDataFrameToValues:

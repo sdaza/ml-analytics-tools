@@ -18,7 +18,10 @@ from pathlib import Path
 from typing import Any
 
 import pandas as pd
+from google.auth.transport.requests import Request
 from google.oauth2 import service_account
+from google.oauth2.credentials import Credentials as OAuthCredentials
+from google_auth_oauthlib.flow import InstalledAppFlow
 from googleapiclient.discovery import build
 from googleapiclient.errors import HttpError
 
@@ -200,7 +203,7 @@ class GSheet:
 
         # Initialize credentials
         self.credentials = self._initialize_credentials(credentials_path, credentials_json)
-        self.service_account_email = self.credentials.service_account_email
+        self.service_account_email = getattr(self.credentials, "service_account_email", None)
 
         # Build the service
         try:
@@ -306,6 +309,10 @@ class GSheet:
                 credentials_json = self._assemble_credentials_from_components()
 
             if credentials_json is None:
+                # OAuth installed-app fallback: activate only when OAuth client
+                # env vars are present and no service-account creds were found.
+                if os.environ.get("GOOGLE_OAUTH_CLIENT_ID") and os.environ.get("GOOGLE_OAUTH_CLIENT_SECRET"):
+                    return self._initialize_oauth_credentials()
                 # Fall back to file-based credential resolution
                 # First try the default filename
                 default_path = Path.cwd() / "gsheet_credentials.json"
@@ -348,6 +355,72 @@ class GSheet:
 
         except Exception as e:
             log_and_raise_error(self._logger, f"Failed to initialize credentials: {e}")
+
+    def _initialize_oauth_credentials(self) -> "OAuthCredentials":
+        """
+        Initialize Google API credentials via the OAuth installed-app flow.
+
+        Loads a cached token if present (refreshing it when expired), otherwise
+        runs a one-time browser consent flow. The resulting token is cached to
+        ``GSHEET_TOKEN_PATH`` (default: ``~/.config/ml-analytics/gsheet_token.json``)
+        so subsequent runs are non-interactive.
+
+        Reads ``GOOGLE_OAUTH_CLIENT_ID``, ``GOOGLE_OAUTH_CLIENT_SECRET`` and the
+        optional ``GOOGLE_CLOUD_PROJECT`` from the environment.
+
+        Returns
+        -------
+        google.oauth2.credentials.Credentials
+            Authorized user credentials.
+        """
+        client_id = os.environ["GOOGLE_OAUTH_CLIENT_ID"]
+        client_secret = os.environ["GOOGLE_OAUTH_CLIENT_SECRET"]
+        project_id = os.environ.get("GOOGLE_CLOUD_PROJECT", "")
+
+        token_path_str = os.environ.get("GSHEET_TOKEN_PATH")
+        if token_path_str:
+            token_path = Path(token_path_str)
+        else:
+            token_path = Path.home() / ".config" / "ml-analytics" / "gsheet_token.json"
+
+        creds = None
+        if token_path.exists():
+            creds = OAuthCredentials.from_authorized_user_file(str(token_path), self.scopes)
+
+        if creds and creds.valid:
+            self._logger.debug("Using cached OAuth token")
+        elif creds and creds.expired and creds.refresh_token:
+            self._logger.info("Refreshing expired OAuth token")
+            creds.refresh(Request())
+            self._save_oauth_token(token_path, creds)
+        else:
+            self._logger.info("No valid OAuth token found; launching browser consent flow")
+            client_config = {
+                "installed": {
+                    "client_id": client_id,
+                    "client_secret": client_secret,
+                    "project_id": project_id,
+                    "auth_uri": "https://accounts.google.com/o/oauth2/auth",
+                    "token_uri": "https://oauth2.googleapis.com/token",
+                    "auth_provider_x509_cert_url": "https://www.googleapis.com/oauth2/v1/certs",
+                    "redirect_uris": ["http://localhost"],
+                }
+            }
+            flow = InstalledAppFlow.from_client_config(client_config, self.scopes)
+            creds = flow.run_local_server(port=0)
+            self._save_oauth_token(token_path, creds)
+
+        self._logger.debug("OAuth credentials initialized")
+        return creds
+
+    def _save_oauth_token(self, token_path: Path, creds: "OAuthCredentials") -> None:
+        """Persist OAuth credentials to ``token_path`` with 0600 permissions."""
+        token_path.parent.mkdir(parents=True, exist_ok=True)
+        token_path.write_text(creds.to_json())
+        try:
+            os.chmod(token_path, 0o600)
+        except OSError as e:
+            self._logger.debug(f"Could not chmod token file: {e}")
 
     def _resolve_spreadsheet_id(self, spreadsheet_id: str | None) -> str | None:
         """Return the per-call spreadsheet_id if provided, else the instance default."""
