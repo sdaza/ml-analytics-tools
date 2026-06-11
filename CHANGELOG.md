@@ -1,5 +1,26 @@
 # Changelog
 
+## [0.3.0](https://github.com/sdaza/ml-analytics-tools/compare/ml-analytics-tools-v0.2.1...ml-analytics-tools-v0.3.0) (2026-06-11)
+
+
+### Features
+
+* add Snowflake support to DataConnector and update README with configuration details ([7237355](https://github.com/sdaza/ml-analytics-tools/commit/7237355a18dd9b91acabe249a080628cfabfed7d))
+* add Snowflake support to DataConnector and update README with configuration details ([a542ae2](https://github.com/sdaza/ml-analytics-tools/commit/a542ae2d8acc55c1a6b43d5cadde0f384c742455))
+* **gsheet:** add OAuth installed-app flow (no-token path) ([7d51bb4](https://github.com/sdaza/ml-analytics-tools/commit/7d51bb40b8b5a7cee0723ad3bb8f438ffadb63e4))
+* **gsheet:** document OAuth env vars and service_account_email None behavior ([7d2bfb4](https://github.com/sdaza/ml-analytics-tools/commit/7d2bfb43a0e678d749b2136f188e2d04a65c8f9b))
+
+
+### Bug Fixes
+
+* **gitignore:** include docs/superpowers directory in .gitignore ([8326c80](https://github.com/sdaza/ml-analytics-tools/commit/8326c80649894079efde6f3600e9f19248b29ffa))
+* **gsheet:** tolerate corrupt OAuth token, fix return type, harden test fixture ([841908a](https://github.com/sdaza/ml-analytics-tools/commit/841908afe049207b8f52f85557afa1770b46adec))
+
+
+### Documentation
+
+* **README:** add note on SSO token caching in OS keychain ([0eef0b3](https://github.com/sdaza/ml-analytics-tools/commit/0eef0b3c05e72a3c15ec5bf5cd2ad46514779bbf))
+
 ## [0.2.1](https://github.com/sdaza/ml-analytics-tools/compare/ml-analytics-tools-v0.2.0...ml-analytics-tools-v0.2.1) (2026-05-20)
 
 
