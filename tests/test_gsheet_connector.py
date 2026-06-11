@@ -14,10 +14,7 @@ from ml_analytics.gsheet_connector import GSheet
 
 @pytest.fixture(autouse=True)
 def clear_oauth_env_vars(monkeypatch):
-    """Remove OAuth env vars from every test so service-account tests are not disturbed.
-
-    The TestGSheetOAuth helpers call _set_oauth_env() to re-add them explicitly.
-    """
+    """Clear OAuth env vars so service-account tests aren't disturbed by a loaded .env."""
     for var in ("GOOGLE_OAUTH_CLIENT_ID", "GOOGLE_OAUTH_CLIENT_SECRET", "GOOGLE_CLOUD_PROJECT"):
         monkeypatch.delenv(var, raising=False)
 
@@ -939,7 +936,7 @@ class TestGSheetOAuth:
     """Test OAuth installed-app authentication path."""
 
     def _set_oauth_env(self, monkeypatch, token_path):
-        # Ensure no service-account creds are picked up first.
+        # no service-account creds present
         for var in (
             "GOOGLE_CREDENTIALS",
             "GOOGLE_PROJECT_ID",
@@ -956,8 +953,7 @@ class TestGSheetOAuth:
         monkeypatch.setenv("GSHEET_TOKEN_PATH", str(token_path))
 
     def test_oauth_runs_flow_when_no_token(self, monkeypatch, tmp_path, mock_google_api_services):
-        # Token lives under a not-yet-existing parent dir to exercise mkdir.
-        token_file = tmp_path / "sub" / "token.json"
+        token_file = tmp_path / "sub" / "token.json"  # missing parent dir -> exercises mkdir
         self._set_oauth_env(monkeypatch, token_file)
 
         mock_creds = MagicMock(spec=RealOAuthCredentials)
@@ -980,7 +976,7 @@ class TestGSheetOAuth:
 
     def test_oauth_uses_valid_cached_token(self, monkeypatch, tmp_path, mock_google_api_services):
         token_file = tmp_path / "token.json"
-        token_file.write_text("{}")  # file must exist so the cache branch is taken
+        token_file.write_text("{}")  # exists -> cache branch
         self._set_oauth_env(monkeypatch, token_file)
 
         mock_creds = MagicMock(spec=RealOAuthCredentials)

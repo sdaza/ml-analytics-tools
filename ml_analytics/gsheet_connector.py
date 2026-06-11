@@ -309,12 +309,10 @@ class GSheet:
                 credentials_json = self._assemble_credentials_from_components()
 
             if credentials_json is None:
-                # OAuth installed-app fallback: activate only when OAuth client
-                # env vars are present and no service-account creds were found.
+                # OAuth fallback: only when OAuth env vars set and no SA creds found.
                 if os.environ.get("GOOGLE_OAUTH_CLIENT_ID") and os.environ.get("GOOGLE_OAUTH_CLIENT_SECRET"):
                     return self._initialize_oauth_credentials()
-                # Fall back to file-based credential resolution
-                # First try the default filename
+                # Fall back to a JSON file in the project/current directory
                 default_path = Path.cwd() / "gsheet_credentials.json"
                 if default_path.exists():
                     credentials_path = default_path
@@ -358,20 +356,12 @@ class GSheet:
 
     def _initialize_oauth_credentials(self) -> "OAuthCredentials":
         """
-        Initialize Google API credentials via the OAuth installed-app flow.
+        Authenticate via the OAuth installed-app flow, caching the token.
 
-        Loads a cached token if present (refreshing it when expired), otherwise
-        runs a one-time browser consent flow. The resulting token is cached to
-        ``GSHEET_TOKEN_PATH`` (default: ``~/.config/ml-analytics/gsheet_token.json``)
-        so subsequent runs are non-interactive.
-
-        Reads ``GOOGLE_OAUTH_CLIENT_ID``, ``GOOGLE_OAUTH_CLIENT_SECRET`` and the
-        optional ``GOOGLE_CLOUD_PROJECT`` from the environment.
-
-        Returns
-        -------
-        google.oauth2.credentials.Credentials
-            Authorized user credentials.
+        Uses a valid cached token, refreshes it if expired, else runs a one-time
+        browser consent. Reads GOOGLE_OAUTH_CLIENT_ID/SECRET and optional
+        GOOGLE_CLOUD_PROJECT; caches to GSHEET_TOKEN_PATH (default
+        ~/.config/ml-analytics/gsheet_token.json).
         """
         client_id = os.environ["GOOGLE_OAUTH_CLIENT_ID"]
         client_secret = os.environ["GOOGLE_OAUTH_CLIENT_SECRET"]
