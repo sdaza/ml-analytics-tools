@@ -281,7 +281,7 @@ class GSheet:
 
     def _initialize_credentials(
         self, credentials_path: str | Path = None, credentials_json: dict = None
-    ) -> service_account.Credentials:
+    ) -> "service_account.Credentials | OAuthCredentials":
         """
         Initialize Google API credentials from file or dictionary.
 
@@ -375,7 +375,11 @@ class GSheet:
 
         creds = None
         if token_path.exists():
-            creds = OAuthCredentials.from_authorized_user_file(str(token_path), self.scopes)
+            try:
+                creds = OAuthCredentials.from_authorized_user_file(str(token_path), self.scopes)
+            except Exception as e:
+                self._logger.warning(f"Ignoring unreadable OAuth token at {token_path}: {e}")
+                creds = None
 
         if creds and creds.valid:
             self._logger.debug("Using cached OAuth token")

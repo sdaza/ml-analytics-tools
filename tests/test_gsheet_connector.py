@@ -15,7 +15,7 @@ from ml_analytics.gsheet_connector import GSheet
 @pytest.fixture(autouse=True)
 def clear_oauth_env_vars(monkeypatch):
     """Clear OAuth env vars so service-account tests aren't disturbed by a loaded .env."""
-    for var in ("GOOGLE_OAUTH_CLIENT_ID", "GOOGLE_OAUTH_CLIENT_SECRET", "GOOGLE_CLOUD_PROJECT"):
+    for var in ("GOOGLE_OAUTH_CLIENT_ID", "GOOGLE_OAUTH_CLIENT_SECRET", "GOOGLE_CLOUD_PROJECT", "GSHEET_TOKEN_PATH"):
         monkeypatch.delenv(var, raising=False)
 
 
@@ -1015,6 +1015,27 @@ class TestGSheetOAuth:
             mock_flow.from_client_config.assert_not_called()
             assert gsheet.credentials is mock_creds
             assert token_file.read_text() == '{"refreshed": true}'
+
+    def test_oauth_falls_back_to_flow_on_corrupt_token(self, monkeypatch, tmp_path, mock_google_api_services):
+        token_file = tmp_path / "token.json"
+        token_file.write_text("not-json")  # corrupt cache -> treat as miss
+        self._set_oauth_env(monkeypatch, token_file)
+
+        mock_creds = MagicMock(spec=RealOAuthCredentials)
+        mock_creds.to_json.return_value = '{"new": true}'
+
+        with patch("ml_analytics.gsheet_connector.OAuthCredentials") as mock_oauth, \
+             patch("ml_analytics.gsheet_connector.InstalledAppFlow") as mock_flow:
+            mock_oauth.from_authorized_user_file.side_effect = ValueError("bad token")
+            flow_instance = MagicMock()
+            flow_instance.run_local_server.return_value = mock_creds
+            mock_flow.from_client_config.return_value = flow_instance
+
+            gsheet = GSheet()
+
+            mock_flow.from_client_config.assert_called_once()
+            assert gsheet.credentials is mock_creds
+            assert token_file.read_text() == '{"new": true}'
 
 
 class TestGSheetDataFrameToValues:
