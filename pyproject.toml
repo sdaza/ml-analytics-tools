@@ -30,6 +30,7 @@ dependencies = [
     "setuptools>=42.0.0",
     "shap>=0.47.2",
     "slack-sdk>=3.27.0",
+    "snowflake-connector-python[pandas,secure-local-storage]>=4.6.0",
 ]
 
 [project.scripts]
