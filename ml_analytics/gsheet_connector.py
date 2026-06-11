@@ -294,8 +294,9 @@ class GSheet:
 
         Returns
         -------
-        service_account.Credentials
-            Google service account credentials.
+        service_account.Credentials | OAuthCredentials
+            Service-account credentials, or OAuth user credentials when the
+            OAuth fallback is used.
         """
         # Try to auto-load from default location if no credentials provided
         if credentials_path is None and credentials_json is None:
@@ -408,13 +409,12 @@ class GSheet:
         return creds
 
     def _save_oauth_token(self, token_path: Path, creds: "OAuthCredentials") -> None:
-        """Persist OAuth credentials to ``token_path`` with 0600 permissions."""
+        """Persist OAuth credentials to ``token_path``, created with 0600 perms."""
         token_path.parent.mkdir(parents=True, exist_ok=True)
-        token_path.write_text(creds.to_json())
-        try:
-            os.chmod(token_path, 0o600)
-        except OSError as e:
-            self._logger.debug(f"Could not chmod token file: {e}")
+        # Create with 0600 atomically so the token is never briefly world-readable.
+        fd = os.open(str(token_path), os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+        with os.fdopen(fd, "w") as f:
+            f.write(creds.to_json())
 
     def _resolve_spreadsheet_id(self, spreadsheet_id: str | None) -> str | None:
         """Return the per-call spreadsheet_id if provided, else the instance default."""

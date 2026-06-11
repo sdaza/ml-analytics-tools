@@ -959,8 +959,10 @@ class TestGSheetOAuth:
         mock_creds = MagicMock(spec=RealOAuthCredentials)
         mock_creds.to_json.return_value = '{"new": true}'
 
-        with patch("ml_analytics.gsheet_connector.InstalledAppFlow") as mock_flow, \
-             patch("ml_analytics.gsheet_connector.OAuthCredentials") as mock_oauth:
+        with (
+            patch("ml_analytics.gsheet_connector.InstalledAppFlow") as mock_flow,
+            patch("ml_analytics.gsheet_connector.OAuthCredentials") as mock_oauth,
+        ):
             flow_instance = MagicMock()
             flow_instance.run_local_server.return_value = mock_creds
             mock_flow.from_client_config.return_value = flow_instance
@@ -982,8 +984,10 @@ class TestGSheetOAuth:
         mock_creds = MagicMock(spec=RealOAuthCredentials)
         mock_creds.valid = True
 
-        with patch("ml_analytics.gsheet_connector.OAuthCredentials") as mock_oauth, \
-             patch("ml_analytics.gsheet_connector.InstalledAppFlow") as mock_flow:
+        with (
+            patch("ml_analytics.gsheet_connector.OAuthCredentials") as mock_oauth,
+            patch("ml_analytics.gsheet_connector.InstalledAppFlow") as mock_flow,
+        ):
             mock_oauth.from_authorized_user_file.return_value = mock_creds
 
             gsheet = GSheet()
@@ -1004,9 +1008,11 @@ class TestGSheetOAuth:
         mock_creds.refresh_token = "refresh-token-value"
         mock_creds.to_json.return_value = '{"refreshed": true}'
 
-        with patch("ml_analytics.gsheet_connector.OAuthCredentials") as mock_oauth, \
-             patch("ml_analytics.gsheet_connector.InstalledAppFlow") as mock_flow, \
-             patch("ml_analytics.gsheet_connector.Request") as _mock_request:
+        with (
+            patch("ml_analytics.gsheet_connector.OAuthCredentials") as mock_oauth,
+            patch("ml_analytics.gsheet_connector.InstalledAppFlow") as mock_flow,
+            patch("ml_analytics.gsheet_connector.Request") as _mock_request,
+        ):
             mock_oauth.from_authorized_user_file.return_value = mock_creds
 
             gsheet = GSheet()
@@ -1024,8 +1030,10 @@ class TestGSheetOAuth:
         mock_creds = MagicMock(spec=RealOAuthCredentials)
         mock_creds.to_json.return_value = '{"new": true}'
 
-        with patch("ml_analytics.gsheet_connector.OAuthCredentials") as mock_oauth, \
-             patch("ml_analytics.gsheet_connector.InstalledAppFlow") as mock_flow:
+        with (
+            patch("ml_analytics.gsheet_connector.OAuthCredentials") as mock_oauth,
+            patch("ml_analytics.gsheet_connector.InstalledAppFlow") as mock_flow,
+        ):
             mock_oauth.from_authorized_user_file.side_effect = ValueError("bad token")
             flow_instance = MagicMock()
             flow_instance.run_local_server.return_value = mock_creds
@@ -1045,8 +1053,10 @@ class TestGSheetOAuth:
         mock_creds = MagicMock(spec=RealOAuthCredentials)
         mock_creds.valid = True
 
-        with patch("ml_analytics.gsheet_connector.OAuthCredentials") as mock_oauth, \
-             patch("ml_analytics.gsheet_connector.InstalledAppFlow"):
+        with (
+            patch("ml_analytics.gsheet_connector.OAuthCredentials") as mock_oauth,
+            patch("ml_analytics.gsheet_connector.InstalledAppFlow"),
+        ):
             mock_oauth.from_authorized_user_file.return_value = mock_creds
 
             gsheet = GSheet()
