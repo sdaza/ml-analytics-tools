@@ -1037,6 +1037,23 @@ class TestGSheetOAuth:
             assert gsheet.credentials is mock_creds
             assert token_file.read_text() == '{"new": true}'
 
+    def test_get_service_account_email_none_under_oauth(self, monkeypatch, tmp_path, mock_google_api_services):
+        token_file = tmp_path / "token.json"
+        token_file.write_text("{}")
+        self._set_oauth_env(monkeypatch, token_file)
+
+        mock_creds = MagicMock(spec=RealOAuthCredentials)
+        mock_creds.valid = True
+
+        with patch("ml_analytics.gsheet_connector.OAuthCredentials") as mock_oauth, \
+             patch("ml_analytics.gsheet_connector.InstalledAppFlow"):
+            mock_oauth.from_authorized_user_file.return_value = mock_creds
+
+            gsheet = GSheet()
+
+            assert gsheet.service_account_email is None
+            assert gsheet.get_service_account_email() is None
+
 
 class TestGSheetDataFrameToValues:
     """Test DataFrame normalization used before writing to Sheets."""

@@ -1065,22 +1065,17 @@ class GSheet:
 
         return permissions
 
-    def get_service_account_email(self) -> str:
+    def get_service_account_email(self) -> str | None:
         """
-        Get the service account email address.
+        Get the service account email used to share sheets for programmatic access.
 
-        This email should be used to share Google Spreadsheets for programmatic access.
+        Returns ``None`` under OAuth auth, where the connector acts as the
+        authenticated user and no service-account sharing is needed.
 
         Returns
         -------
-        str
-            The service account email address.
-
-        Examples
-        --------
-        >>> gsheet = GSheet(credentials_path="creds.json")
-        >>> email = gsheet.get_service_account_email()
-        >>> print(f"Share your spreadsheet with: {email}")
+        str | None
+            The service account email, or ``None`` under OAuth auth.
         """
         return self.service_account_email
 

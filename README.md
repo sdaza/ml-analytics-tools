@@ -194,6 +194,24 @@ df = gsheet.read_sheet(spreadsheet_id="...", sheet_name="Input")
 gsheet.write_sheet(df, spreadsheet_id="...", sheet_name="Results")
 ```
 
+#### OAuth authentication (alternative to a service account)
+
+`GSheet` can authenticate as your own Google account using OAuth installed-app
+credentials (e.g. Preply's Google Workspace CLI credentials). Set these env vars
+and the connector uses OAuth automatically when no service-account credentials
+are found:
+
+| Variable | Required | Description |
+|----------|----------|-------------|
+| `GOOGLE_OAUTH_CLIENT_ID` | yes | OAuth client id (`...apps.googleusercontent.com`) |
+| `GOOGLE_OAUTH_CLIENT_SECRET` | yes | OAuth client secret (`GOCSPX-...`) |
+| `GOOGLE_CLOUD_PROJECT` | optional | GCP project id (e.g. `preply-gworkspace-cli`) |
+| `GSHEET_TOKEN_PATH` | optional | Token cache path (default `~/.config/ml-analytics/gsheet_token.json`) |
+
+The first run opens a browser for one-time consent; the cached refresh token
+makes later runs non-interactive. Under OAuth, `get_service_account_email()`
+returns `None`.
+
 ### Log To MLflow
 
 ```python
