@@ -130,6 +130,8 @@ df = dc.sql("SELECT 1 AS col_1")
 ```
 
 For local interactive work, `SNOWFLAKE_AUTHENTICATOR=externalbrowser` is supported.
+SSO tokens are cached in the OS keychain, so the browser login only happens once
+per token lifetime.
 For Databricks and Spark jobs, use key-pair auth instead. The connector reads
 default Databricks personal-scope secrets automatically:
 
