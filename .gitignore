@@ -13,3 +13,4 @@ tests/interactive.py
 !.release-please-manifest.json
 *.png
 /tasks
+docs/superpowers

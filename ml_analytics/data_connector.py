@@ -7,6 +7,7 @@ import os
 import re
 import threading
 import time
+from pathlib import Path
 
 import boto3
 import pandas as pd
@@ -24,6 +25,173 @@ from .utils import (
     log_and_raise_error,
 )
 
+SNOWFLAKE_SPARK_SOURCE_NAME = "net.snowflake.spark.snowflake"
+
+
+def _clean_env_value(value):
+    if value is None:
+        return None
+    if isinstance(value, str) and value.strip() == "":
+        return None
+    return value
+
+
+def _snowflake_secret_scope(scope: str = None, user: str = None) -> str | None:
+    configured_scope = _clean_env_value(
+        scope
+        or os.getenv("SNOWFLAKE_SECRET_SCOPE")
+        or os.getenv("ML_ANALYTICS_SNOWFLAKE_SECRET_SCOPE")
+        or os.getenv("DATABRICKS_SECRET_SCOPE")
+    )
+    if configured_scope is not None:
+        return configured_scope
+
+    user = _clean_env_value(user or os.getenv("SNOWFLAKE_USER"))
+    if user and "@" in user:
+        return f"user-{user}"
+
+    return None
+
+
+def _get_databricks_dbutils():
+    try:
+        import builtins
+
+        dbutils = getattr(builtins, "dbutils", None)
+        if dbutils is not None:
+            return dbutils
+    except Exception:
+        pass
+
+    try:
+        import __main__
+
+        dbutils = getattr(__main__, "dbutils", None)
+        if dbutils is not None:
+            return dbutils
+    except Exception:
+        pass
+
+    try:
+        from IPython import get_ipython
+
+        shell = get_ipython()
+        if shell is not None:
+            return shell.user_ns.get("dbutils")
+    except Exception:
+        pass
+
+    return None
+
+
+def _get_databricks_secret(key: str, scope: str = None):
+    scope = _snowflake_secret_scope(scope)
+    if not scope or not key:
+        return None
+
+    dbutils = _get_databricks_dbutils()
+    if dbutils is None:
+        return None
+
+    try:
+        return _clean_env_value(dbutils.secrets.get(scope=scope, key=key))
+    except Exception:
+        return None
+
+
+def _get_snowflake_config_value(name: str, explicit=None, secret_scope: str = None, aliases: tuple[str, ...] = ()):
+    explicit = _clean_env_value(explicit)
+    if explicit is not None:
+        return explicit
+
+    candidate_names = (name, *aliases)
+    for candidate in candidate_names:
+        value = _clean_env_value(os.getenv(candidate))
+        if value is not None:
+            return value
+
+    secret_scope = _snowflake_secret_scope(secret_scope)
+    if not secret_scope:
+        return None
+
+    configured_secret_key = _clean_env_value(os.getenv(f"{name}_SECRET_KEY"))
+    secret_keys = []
+    for key in (configured_secret_key, *candidate_names):
+        if key and key not in secret_keys:
+            secret_keys.append(key)
+
+    for secret_key in secret_keys:
+        value = _get_databricks_secret(secret_key, scope=secret_scope)
+        if value is not None:
+            return value
+
+    return None
+
+
+def _read_private_key_pem(private_key: str | bytes = None, private_key_path: str = None) -> bytes | None:
+    """Read Snowflake private key material from an env value or a local file path."""
+    if private_key:
+        pem_bytes = private_key if isinstance(private_key, bytes) else private_key.encode()
+        if b"\\n" in pem_bytes and b"\n" not in pem_bytes:
+            pem_bytes = pem_bytes.replace(b"\\n", b"\n")
+        return pem_bytes
+
+    if private_key_path:
+        return Path(private_key_path).expanduser().read_bytes()
+
+    return None
+
+
+def _load_private_key_der(
+    private_key: str | bytes = None,
+    private_key_path: str = None,
+    passphrase: str = None,
+) -> bytes | None:
+    """Load a Snowflake key-pair private key as DER bytes for the Python connector."""
+    pem_bytes = _read_private_key_pem(private_key=private_key, private_key_path=private_key_path)
+    if pem_bytes is None:
+        return None
+
+    from cryptography.hazmat.backends import default_backend
+    from cryptography.hazmat.primitives import serialization
+
+    key = serialization.load_pem_private_key(
+        pem_bytes,
+        password=passphrase.encode() if passphrase else None,
+        backend=default_backend(),
+    )
+    return key.private_bytes(
+        encoding=serialization.Encoding.DER,
+        format=serialization.PrivateFormat.PKCS8,
+        encryption_algorithm=serialization.NoEncryption(),
+    )
+
+
+def _load_private_key_pem_for_spark(
+    private_key: str | bytes = None,
+    private_key_path: str = None,
+    passphrase: str = None,
+) -> str | None:
+    """Load a Snowflake key-pair private key in the format expected by the Spark connector."""
+    pem_bytes = _read_private_key_pem(private_key=private_key, private_key_path=private_key_path)
+    if pem_bytes is None:
+        return None
+
+    from cryptography.hazmat.backends import default_backend
+    from cryptography.hazmat.primitives import serialization
+
+    key = serialization.load_pem_private_key(
+        pem_bytes,
+        password=passphrase.encode() if passphrase else None,
+        backend=default_backend(),
+    )
+    pem = key.private_bytes(
+        encoding=serialization.Encoding.PEM,
+        format=serialization.PrivateFormat.PKCS8,
+        encryption_algorithm=serialization.NoEncryption(),
+    ).decode("utf-8")
+    return re.sub(r"-*(BEGIN|END) PRIVATE KEY-*\n", "", pem).replace("\n", "")
+
 
 class DataConnector:
     def __init__(
@@ -36,22 +204,58 @@ class DataConnector:
         port=None,
         s3_bucket=None,
         timeout=240,
+        engine=None,
+        account=None,
+        warehouse=None,
+        schema=None,
+        role=None,
+        authenticator=None,
+        private_key=None,
+        private_key_path=None,
+        private_key_passphrase=None,
+        secret_scope=None,
     ):
         """
         Initialize a DataConnector instance.
         Connection is established lazily and will time out after a period of inactivity.
+
+        By default, this connector uses Redshift to preserve existing behavior.
+        Pass ``engine="snowflake"`` or set ``ML_ANALYTICS_DB_ENGINE=snowflake``
+        to use Snowflake connection settings from ``SNOWFLAKE_*`` environment variables.
         """
-        self._db_params = {
-            "database": database or get_credential_value("BI_REDSHIFT_DB"),
-            "user": user or get_credential_value("BI_REDSHIFT_USER"),
-            "password": password or get_credential_value("BI_REDSHIFT_PASSWORD"),
-            "host": host or get_credential_value("BI_REDSHIFT_HOST"),
-            "port": port or get_credential_value("BI_REDSHIFT_PORT"),
-        }
+        self._logger = get_logger("Data Connector")
+        self.engine = self._resolve_engine(engine)
+        self._snowflake_private_key = private_key
+        self._snowflake_private_key_path = private_key_path
+        self._snowflake_private_key_passphrase = private_key_passphrase
+        self._snowflake_secret_scope = _snowflake_secret_scope(secret_scope, user=user)
+
+        if self.engine == "snowflake":
+            self._db_params = self._build_snowflake_params(
+                database=database,
+                user=user,
+                password=password,
+                account=account,
+                warehouse=warehouse,
+                schema=schema,
+                role=role,
+                authenticator=authenticator,
+                private_key=private_key,
+                private_key_path=private_key_path,
+                private_key_passphrase=private_key_passphrase,
+                secret_scope=self._snowflake_secret_scope,
+            )
+        else:
+            self._db_params = {
+                "database": database or get_credential_value("BI_REDSHIFT_DB"),
+                "user": user or get_credential_value("BI_REDSHIFT_USER"),
+                "password": password or get_credential_value("BI_REDSHIFT_PASSWORD"),
+                "host": host or get_credential_value("BI_REDSHIFT_HOST"),
+                "port": port or get_credential_value("BI_REDSHIFT_PORT"),
+            }
         self._s3_bucket = s3_bucket or os.getenv("ML_ANALYTICS_S3_BUCKET")
         self.connection = None
         self.cursor = None
-        self._logger = get_logger("Data Connector")
         self.s3 = None
 
         # Cache for S3 connectors by bucket name
@@ -65,6 +269,202 @@ class DataConnector:
         # acquire the lock (e.g. _close_if_idle -> close_redshift_connection ->
         # _cancel_idle_timer). An RLock avoids deadlocks in that scenario.
         self._lock = threading.RLock()
+
+    @staticmethod
+    def _resolve_engine(engine: str = None) -> str:
+        selected = (
+            engine
+            or os.getenv("ML_ANALYTICS_DB_ENGINE")
+            or os.getenv("ML_ANALYTICS_DATABASE_ENGINE")
+            or "redshift"
+        )
+        normalized = selected.strip().lower().replace("-", "_")
+        aliases = {
+            "redshift": "redshift",
+            "rs": "redshift",
+            "snowflake": "snowflake",
+            "snow_flake": "snowflake",
+            "sf": "snowflake",
+        }
+        if normalized not in aliases:
+            raise ValueError("Unsupported DataConnector engine. Use 'redshift' or 'snowflake'.")
+        return aliases[normalized]
+
+    @staticmethod
+    def _import_snowflake_connector():
+        try:
+            import snowflake.connector as snowflake_connector
+        except ImportError as exc:
+            raise ImportError(
+                "Snowflake support requires the optional package "
+                "'snowflake-connector-python[pandas]'. Install it before using "
+                "DataConnector(engine='snowflake')."
+            ) from exc
+        return snowflake_connector
+
+    @staticmethod
+    def _build_snowflake_params(
+        *,
+        database=None,
+        user=None,
+        password=None,
+        account=None,
+        warehouse=None,
+        schema=None,
+        role=None,
+        authenticator=None,
+        private_key=None,
+        private_key_path=None,
+        private_key_passphrase=None,
+        secret_scope=None,
+    ) -> dict:
+        secret_scope = _snowflake_secret_scope(secret_scope)
+        private_key = _get_snowflake_config_value(
+            "SNOWFLAKE_PRIVATE_KEY",
+            explicit=private_key,
+            secret_scope=secret_scope,
+            aliases=("snowflake_key",),
+        )
+        private_key_path = _get_snowflake_config_value(
+            "SNOWFLAKE_PRIVATE_KEY_PATH",
+            explicit=private_key_path,
+            secret_scope=secret_scope,
+            aliases=("SNOWFLAKE_PRIVATE_KEY_FILE",),
+        )
+        private_key_passphrase = _get_snowflake_config_value(
+            "SNOWFLAKE_PRIVATE_KEY_PASSPHRASE",
+            explicit=private_key_passphrase,
+            secret_scope=secret_scope,
+            aliases=("PRIVATE_KEY_PASSPHRASE", "snowflake_key_pass"),
+        )
+        token = _get_snowflake_config_value(
+            "SNOWFLAKE_TOKEN",
+            secret_scope=secret_scope,
+            aliases=("SNOWFLAKE_OAUTH_TOKEN", "SNOWFLAKE_ACCESS_TOKEN"),
+        )
+        resolved_authenticator = _get_snowflake_config_value(
+            "SNOWFLAKE_AUTHENTICATOR",
+            explicit=authenticator,
+            secret_scope=secret_scope,
+        )
+
+        params = {
+            "user": _get_snowflake_config_value(
+                "SNOWFLAKE_USER",
+                explicit=user,
+                secret_scope=secret_scope,
+                aliases=("snowflake_user",),
+            ),
+            "password": _get_snowflake_config_value(
+                "SNOWFLAKE_PASSWORD", explicit=password, secret_scope=secret_scope
+            ),
+            "account": _get_snowflake_config_value(
+                "SNOWFLAKE_ACCOUNT", explicit=account, secret_scope=secret_scope
+            ),
+            "warehouse": _get_snowflake_config_value(
+                "SNOWFLAKE_WAREHOUSE", explicit=warehouse, secret_scope=secret_scope
+            ),
+            "database": _get_snowflake_config_value(
+                "SNOWFLAKE_DATABASE", explicit=database, secret_scope=secret_scope
+            ),
+            "schema": _get_snowflake_config_value("SNOWFLAKE_SCHEMA", explicit=schema, secret_scope=secret_scope),
+            "role": _get_snowflake_config_value("SNOWFLAKE_ROLE", explicit=role, secret_scope=secret_scope),
+            "autocommit": True,
+        }
+
+        if private_key or private_key_path:
+            params["authenticator"] = "SNOWFLAKE_JWT"
+            params.pop("password", None)
+            params["private_key"] = _load_private_key_der(
+                private_key=private_key,
+                private_key_path=private_key_path,
+                passphrase=private_key_passphrase,
+            )
+        elif token:
+            params["authenticator"] = resolved_authenticator or "oauth"
+            params["token"] = token
+            params.pop("password", None)
+        else:
+            params["authenticator"] = resolved_authenticator
+
+        return {key: value for key, value in params.items() if _clean_env_value(value) is not None}
+
+    @staticmethod
+    def _snowflake_account_url(account: str) -> str:
+        account_url = account.strip().removeprefix("https://").removeprefix("http://").rstrip("/")
+        if account_url.endswith(".snowflakecomputing.com"):
+            return account_url
+        return f"{account_url}.snowflakecomputing.com"
+
+    def snowflake_spark_options(self, include_private_key: bool = True) -> dict[str, str]:
+        """Return options for ``spark.read.format(SNOWFLAKE_SPARK_SOURCE_NAME).options(...)``."""
+        if self.engine != "snowflake":
+            log_and_raise_error(
+                self._logger,
+                "snowflake_spark_options() is only available when DataConnector uses engine='snowflake'.",
+                NotImplementedError,
+            )
+
+        account = self._db_params.get("account")
+        if not account:
+            log_and_raise_error(self._logger, "SNOWFLAKE_ACCOUNT is required to build Spark options.")
+
+        options = {
+            "sfURL": self._snowflake_account_url(account),
+            "sfUser": self._db_params.get("user"),
+            "sfDatabase": self._db_params.get("database"),
+            "sfSchema": self._db_params.get("schema"),
+            "sfWarehouse": self._db_params.get("warehouse"),
+            "sfRole": self._db_params.get("role"),
+        }
+        options = {key: value for key, value in options.items() if _clean_env_value(value) is not None}
+
+        private_key = _get_snowflake_config_value(
+            "SNOWFLAKE_PRIVATE_KEY",
+            explicit=self._snowflake_private_key,
+            secret_scope=self._snowflake_secret_scope,
+            aliases=("snowflake_key",),
+        )
+        private_key_path = _get_snowflake_config_value(
+            "SNOWFLAKE_PRIVATE_KEY_PATH",
+            explicit=self._snowflake_private_key_path,
+            secret_scope=self._snowflake_secret_scope,
+            aliases=("SNOWFLAKE_PRIVATE_KEY_FILE",),
+        )
+        private_key_passphrase = _get_snowflake_config_value(
+            "SNOWFLAKE_PRIVATE_KEY_PASSPHRASE",
+            explicit=self._snowflake_private_key_passphrase,
+            secret_scope=self._snowflake_secret_scope,
+            aliases=("PRIVATE_KEY_PASSPHRASE", "snowflake_key_pass"),
+        )
+        token = _get_snowflake_config_value(
+            "SNOWFLAKE_TOKEN",
+            secret_scope=self._snowflake_secret_scope,
+            aliases=("SNOWFLAKE_OAUTH_TOKEN", "SNOWFLAKE_ACCESS_TOKEN"),
+        )
+
+        if include_private_key and (private_key or private_key_path):
+            options["pem_private_key"] = _load_private_key_pem_for_spark(
+                private_key=private_key,
+                private_key_path=private_key_path,
+                passphrase=private_key_passphrase,
+            )
+        elif token:
+            options["sfAuthenticator"] = self._db_params.get("authenticator", "oauth")
+            options["sfToken"] = token
+        else:
+            authenticator = self._db_params.get("authenticator")
+            if authenticator:
+                options["sfAuthenticator"] = authenticator
+                if authenticator.lower() == "externalbrowser":
+                    self._logger.warning(
+                        "Snowflake externalbrowser authentication is interactive and is not suitable for "
+                        "Databricks/Spark jobs. Use key-pair or OAuth for Spark workloads."
+                    )
+
+        return options
+
+    get_snowflake_spark_options = snowflake_spark_options
 
     def _is_connection_open(self) -> bool:
         """Return True when the underlying connection is open/usable.
@@ -207,8 +607,12 @@ class DataConnector:
                 return
 
             try:
-                self.connection = redshift_connector.connect(**self._db_params)
-                self.connection.autocommit = True
+                if self.engine == "snowflake":
+                    snowflake_connector = self._import_snowflake_connector()
+                    self.connection = snowflake_connector.connect(**self._db_params)
+                else:
+                    self.connection = redshift_connector.connect(**self._db_params)
+                    self.connection.autocommit = True
                 self.cursor = self.connection.cursor()
                 self._start_idle_timer()  # Start idle timer on new connection
 
@@ -217,7 +621,7 @@ class DataConnector:
                     self.s3 = self._get_s3_for_bucket(self._s3_bucket)
 
             except Exception as e:
-                log_and_raise_error(self._logger, f"Failed to connect to Redshift: {e}")
+                log_and_raise_error(self._logger, f"Failed to connect to {self.engine.title()}: {e}")
 
     def close_redshift_connection(self):
         """Close the database connection if it is open."""
@@ -246,6 +650,10 @@ class DataConnector:
                             pass
             except Exception as e:
                 self._logger.warning(f"Error closing connection: {e}")
+
+    def close_connection(self):
+        """Close the database connection if it is open."""
+        self.close_redshift_connection()
 
     def __del__(self):
         """Ensure the database connection is closed when the instance is garbage-collected."""
@@ -347,9 +755,22 @@ class DataConnector:
         finally:
             self._start_idle_timer()
 
+    def _fetch_pandas_dataframe(self) -> pd.DataFrame:
+        if self.engine == "snowflake" and hasattr(self.cursor, "fetch_pandas_all"):
+            return self.cursor.fetch_pandas_all()
+        if hasattr(self.cursor, "fetch_dataframe"):
+            return self.cursor.fetch_dataframe()
+        if hasattr(self.cursor, "fetch_pandas_all"):
+            return self.cursor.fetch_pandas_all()
+
+        rows = self.cursor.fetchall()
+        description = getattr(self.cursor, "description", None) or []
+        columns = [col[0] for col in description]
+        return pd.DataFrame(rows, columns=columns or None)
+
     def sql(self, query: str = None, format: str = "pandas", **kwargs) -> pl.DataFrame | pd.DataFrame:
         """
-        Execute a SQL query against the Redshift database and return the result.
+        Execute a SQL query against the configured database and return the result.
 
         Parameters
         ----------
@@ -369,11 +790,15 @@ class DataConnector:
 
             if format == "pandas":
                 self.execute_sql(query)
-                tmp = self.cursor.fetch_dataframe()
+                tmp = self._fetch_pandas_dataframe()
                 self._logger.info("Data fetched successfully")
                 return tmp
             elif format == "polars":
-                tmp = pl.read_database(query, connection=self.cursor)
+                if self.engine == "snowflake":
+                    self.execute_sql(query)
+                    tmp = pl.from_pandas(self._fetch_pandas_dataframe())
+                else:
+                    tmp = pl.read_database(query, connection=self.cursor)
                 self._logger.info("Data fetched successfully")
                 return tmp
         except Exception as e:

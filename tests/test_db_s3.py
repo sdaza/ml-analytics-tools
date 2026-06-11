@@ -1,4 +1,5 @@
 # %%
+import builtins
 import gc
 import threading
 import weakref
@@ -11,6 +12,44 @@ import pytest
 from ml_analytics.data_connector import DataConnector
 from ml_analytics.s3_connector import S3Connector
 from ml_analytics.utils import _is_select_statement
+
+
+class _DatabricksSecretsMock:
+    def __init__(self, values):
+        self._values = values
+
+    def get(self, scope, key):
+        value = self._values.get((scope, key))
+        if value is None:
+            raise KeyError(f"{scope}/{key}")
+        return value
+
+
+def _clear_snowflake_env(monkeypatch):
+    for name in [
+        "DATABRICKS_SECRET_SCOPE",
+        "ML_ANALYTICS_DATABASE_ENGINE",
+        "ML_ANALYTICS_DB_ENGINE",
+        "ML_ANALYTICS_SNOWFLAKE_SECRET_SCOPE",
+        "PRIVATE_KEY_PASSPHRASE",
+        "SNOWFLAKE_ACCESS_TOKEN",
+        "SNOWFLAKE_ACCOUNT",
+        "SNOWFLAKE_AUTHENTICATOR",
+        "SNOWFLAKE_DATABASE",
+        "SNOWFLAKE_OAUTH_TOKEN",
+        "SNOWFLAKE_PASSWORD",
+        "SNOWFLAKE_PRIVATE_KEY",
+        "SNOWFLAKE_PRIVATE_KEY_FILE",
+        "SNOWFLAKE_PRIVATE_KEY_PASSPHRASE",
+        "SNOWFLAKE_PRIVATE_KEY_PATH",
+        "SNOWFLAKE_ROLE",
+        "SNOWFLAKE_SCHEMA",
+        "SNOWFLAKE_SECRET_SCOPE",
+        "SNOWFLAKE_TOKEN",
+        "SNOWFLAKE_USER",
+        "SNOWFLAKE_WAREHOUSE",
+    ]:
+        monkeypatch.delenv(name, raising=False)
 
 
 @pytest.fixture
@@ -37,6 +76,115 @@ def mock_credentials(monkeypatch):
     with patch("ml_analytics.data_connector.get_credential_value") as mock_get_credential_value:
         mock_get_credential_value.side_effect = lambda key: f"mock_{key.lower()}"
         yield mock_get_credential_value
+
+
+def test_snowflake_externalbrowser_params(monkeypatch):
+    _clear_snowflake_env(monkeypatch)
+    monkeypatch.setenv("SNOWFLAKE_USER", "your.name@example.com")
+    monkeypatch.setenv("SNOWFLAKE_ACCOUNT", "example-account")
+    monkeypatch.setenv("SNOWFLAKE_AUTHENTICATOR", "externalbrowser")
+    monkeypatch.setenv("SNOWFLAKE_WAREHOUSE", "ANALYTICS_S_WH")
+    monkeypatch.setenv("SNOWFLAKE_DATABASE", "ANALYTICS_DB")
+    monkeypatch.setenv("SNOWFLAKE_SCHEMA", "PUBLIC")
+
+    dc = DataConnector(engine="snowflake")
+
+    assert dc._db_params["user"] == "your.name@example.com"
+    assert dc._db_params["account"] == "example-account"
+    assert dc._db_params["authenticator"] == "externalbrowser"
+    assert dc._db_params["warehouse"] == "ANALYTICS_S_WH"
+    assert dc._db_params["database"] == "ANALYTICS_DB"
+    assert dc._db_params["schema"] == "PUBLIC"
+    assert "private_key" not in dc._db_params
+
+
+def test_snowflake_key_pair_params_from_databricks_scope(monkeypatch):
+    _clear_snowflake_env(monkeypatch)
+    monkeypatch.setenv("SNOWFLAKE_USER", "your.name@example.com")
+    monkeypatch.setenv("SNOWFLAKE_ACCOUNT", "example-account")
+    monkeypatch.setenv("SNOWFLAKE_WAREHOUSE", "ANALYTICS_S_WH")
+    monkeypatch.setenv("SNOWFLAKE_DATABASE", "ANALYTICS_DB")
+    monkeypatch.setenv("SNOWFLAKE_SCHEMA", "PUBLIC")
+
+    pem = "-----BEGIN ENCRYPTED PRIVATE KEY-----\nabc\n-----END ENCRYPTED PRIVATE KEY-----"
+    dbutils = MagicMock()
+    dbutils.secrets = _DatabricksSecretsMock(
+        {
+            ("user-your.name@example.com", "snowflake_key"): pem,
+            ("user-your.name@example.com", "snowflake_key_pass"): "key-pass",
+        }
+    )
+    monkeypatch.setattr(builtins, "dbutils", dbutils, raising=False)
+
+    with patch("ml_analytics.data_connector._load_private_key_der", return_value=b"der-key") as mock_load_key:
+        dc = DataConnector(engine="snowflake")
+
+    assert dc._snowflake_secret_scope == "user-your.name@example.com"
+    assert dc._db_params["authenticator"] == "SNOWFLAKE_JWT"
+    assert dc._db_params["private_key"] == b"der-key"
+    assert "password" not in dc._db_params
+    mock_load_key.assert_called_once_with(
+        private_key=pem,
+        private_key_path=None,
+        passphrase="key-pass",
+    )
+
+
+def test_snowflake_spark_options_use_key_pair_secrets(monkeypatch):
+    _clear_snowflake_env(monkeypatch)
+    monkeypatch.setenv("SNOWFLAKE_USER", "your.name@example.com")
+    monkeypatch.setenv("SNOWFLAKE_ACCOUNT", "example-account")
+    monkeypatch.setenv("SNOWFLAKE_WAREHOUSE", "ANALYTICS_S_WH")
+    monkeypatch.setenv("SNOWFLAKE_DATABASE", "ANALYTICS_DB")
+    monkeypatch.setenv("SNOWFLAKE_SCHEMA", "PUBLIC")
+
+    pem = "-----BEGIN ENCRYPTED PRIVATE KEY-----\nabc\n-----END ENCRYPTED PRIVATE KEY-----"
+    dbutils = MagicMock()
+    dbutils.secrets = _DatabricksSecretsMock(
+        {
+            ("user-your.name@example.com", "snowflake_key"): pem,
+            ("user-your.name@example.com", "snowflake_key_pass"): "key-pass",
+        }
+    )
+    monkeypatch.setattr(builtins, "dbutils", dbutils, raising=False)
+
+    with (
+        patch("ml_analytics.data_connector._load_private_key_der", return_value=b"der-key"),
+        patch(
+            "ml_analytics.data_connector._load_private_key_pem_for_spark",
+            return_value="spark-key",
+        ) as mock_spark_key,
+    ):
+        dc = DataConnector(engine="snowflake")
+        options = dc.snowflake_spark_options()
+
+    assert options == {
+        "sfURL": "example-account.snowflakecomputing.com",
+        "sfUser": "your.name@example.com",
+        "sfDatabase": "ANALYTICS_DB",
+        "sfSchema": "PUBLIC",
+        "sfWarehouse": "ANALYTICS_S_WH",
+        "pem_private_key": "spark-key",
+    }
+    mock_spark_key.assert_called_once_with(
+        private_key=pem,
+        private_key_path=None,
+        passphrase="key-pass",
+    )
+
+
+def test_snowflake_oauth_token_params(monkeypatch):
+    _clear_snowflake_env(monkeypatch)
+    monkeypatch.setenv("SNOWFLAKE_USER", "your.name@example.com")
+    monkeypatch.setenv("SNOWFLAKE_ACCOUNT", "example-account")
+    monkeypatch.setenv("SNOWFLAKE_TOKEN", "oauth-token")
+    monkeypatch.setenv("SNOWFLAKE_PASSWORD", "ignored-password")
+
+    dc = DataConnector(engine="snowflake")
+
+    assert dc._db_params["authenticator"] == "oauth"
+    assert dc._db_params["token"] == "oauth-token"
+    assert "password" not in dc._db_params
 
 
 def test_s3_and_db_operations(mock_s3, mock_db, mock_credentials):

@@ -18,7 +18,10 @@ from pathlib import Path
 from typing import Any
 
 import pandas as pd
+from google.auth.transport.requests import Request
 from google.oauth2 import service_account
+from google.oauth2.credentials import Credentials as OAuthCredentials
+from google_auth_oauthlib.flow import InstalledAppFlow
 from googleapiclient.discovery import build
 from googleapiclient.errors import HttpError
 
@@ -200,7 +203,7 @@ class GSheet:
 
         # Initialize credentials
         self.credentials = self._initialize_credentials(credentials_path, credentials_json)
-        self.service_account_email = self.credentials.service_account_email
+        self.service_account_email = getattr(self.credentials, "service_account_email", None)
 
         # Build the service
         try:
@@ -278,7 +281,7 @@ class GSheet:
 
     def _initialize_credentials(
         self, credentials_path: str | Path = None, credentials_json: dict = None
-    ) -> service_account.Credentials:
+    ) -> "service_account.Credentials | OAuthCredentials":
         """
         Initialize Google API credentials from file or dictionary.
 
@@ -291,8 +294,9 @@ class GSheet:
 
         Returns
         -------
-        service_account.Credentials
-            Google service account credentials.
+        service_account.Credentials | OAuthCredentials
+            Service-account credentials, or OAuth user credentials when the
+            OAuth fallback is used.
         """
         # Try to auto-load from default location if no credentials provided
         if credentials_path is None and credentials_json is None:
@@ -306,8 +310,10 @@ class GSheet:
                 credentials_json = self._assemble_credentials_from_components()
 
             if credentials_json is None:
-                # Fall back to file-based credential resolution
-                # First try the default filename
+                # OAuth fallback: only when OAuth env vars set and no SA creds found.
+                if os.environ.get("GOOGLE_OAUTH_CLIENT_ID") and os.environ.get("GOOGLE_OAUTH_CLIENT_SECRET"):
+                    return self._initialize_oauth_credentials()
+                # Fall back to a JSON file in the project/current directory
                 default_path = Path.cwd() / "gsheet_credentials.json"
                 if default_path.exists():
                     credentials_path = default_path
@@ -348,6 +354,67 @@ class GSheet:
 
         except Exception as e:
             log_and_raise_error(self._logger, f"Failed to initialize credentials: {e}")
+
+    def _initialize_oauth_credentials(self) -> "OAuthCredentials":
+        """
+        Authenticate via the OAuth installed-app flow, caching the token.
+
+        Uses a valid cached token, refreshes it if expired, else runs a one-time
+        browser consent. Reads GOOGLE_OAUTH_CLIENT_ID/SECRET and optional
+        GOOGLE_CLOUD_PROJECT; caches to GSHEET_TOKEN_PATH (default
+        ~/.config/ml-analytics/gsheet_token.json).
+        """
+        client_id = os.environ["GOOGLE_OAUTH_CLIENT_ID"]
+        client_secret = os.environ["GOOGLE_OAUTH_CLIENT_SECRET"]
+        project_id = os.environ.get("GOOGLE_CLOUD_PROJECT", "")
+
+        token_path_str = os.environ.get("GSHEET_TOKEN_PATH")
+        if token_path_str:
+            token_path = Path(token_path_str)
+        else:
+            token_path = Path.home() / ".config" / "ml-analytics" / "gsheet_token.json"
+
+        creds = None
+        if token_path.exists():
+            try:
+                creds = OAuthCredentials.from_authorized_user_file(str(token_path), self.scopes)
+            except Exception as e:
+                self._logger.warning(f"Ignoring unreadable OAuth token at {token_path}: {e}")
+                creds = None
+
+        if creds and creds.valid:
+            self._logger.debug("Using cached OAuth token")
+        elif creds and creds.expired and creds.refresh_token:
+            self._logger.info("Refreshing expired OAuth token")
+            creds.refresh(Request())
+            self._save_oauth_token(token_path, creds)
+        else:
+            self._logger.info("No valid OAuth token found; launching browser consent flow")
+            client_config = {
+                "installed": {
+                    "client_id": client_id,
+                    "client_secret": client_secret,
+                    "project_id": project_id,
+                    "auth_uri": "https://accounts.google.com/o/oauth2/auth",
+                    "token_uri": "https://oauth2.googleapis.com/token",
+                    "auth_provider_x509_cert_url": "https://www.googleapis.com/oauth2/v1/certs",
+                    "redirect_uris": ["http://localhost"],
+                }
+            }
+            flow = InstalledAppFlow.from_client_config(client_config, self.scopes)
+            creds = flow.run_local_server(port=0)
+            self._save_oauth_token(token_path, creds)
+
+        self._logger.debug("OAuth credentials initialized")
+        return creds
+
+    def _save_oauth_token(self, token_path: Path, creds: "OAuthCredentials") -> None:
+        """Persist OAuth credentials to ``token_path``, created with 0600 perms."""
+        token_path.parent.mkdir(parents=True, exist_ok=True)
+        # Create with 0600 atomically so the token is never briefly world-readable.
+        fd = os.open(str(token_path), os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+        with os.fdopen(fd, "w") as f:
+            f.write(creds.to_json())
 
     def _resolve_spreadsheet_id(self, spreadsheet_id: str | None) -> str | None:
         """Return the per-call spreadsheet_id if provided, else the instance default."""
@@ -998,22 +1065,17 @@ class GSheet:
 
         return permissions
 
-    def get_service_account_email(self) -> str:
+    def get_service_account_email(self) -> str | None:
         """
-        Get the service account email address.
+        Get the service account email used to share sheets for programmatic access.
 
-        This email should be used to share Google Spreadsheets for programmatic access.
+        Returns ``None`` under OAuth auth, where the connector acts as the
+        authenticated user and no service-account sharing is needed.
 
         Returns
         -------
-        str
-            The service account email address.
-
-        Examples
-        --------
-        >>> gsheet = GSheet(credentials_path="creds.json")
-        >>> email = gsheet.get_service_account_email()
-        >>> print(f"Share your spreadsheet with: {email}")
+        str | None
+            The service account email, or ``None`` under OAuth auth.
         """
         return self.service_account_email
 
