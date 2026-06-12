@@ -23,17 +23,18 @@ from .utils import (
 # Automatically load .env file when the package is imported
 logger = get_logger("ml_analytics")
 try:
-    project_root = find_project_root()
-    env_file = project_root / ".env"
-    if env_file.exists():
+    project_root = find_project_root(required=False)
+    env_file = project_root / ".env" if project_root else None
+    if env_file is not None and env_file.exists():
         if load_dotenv(env_file, override=True):
             logger.info(".env file loaded successfully.")
         else:
-            logger.info("Failed to load .env file.")
+            logger.warning("Failed to load .env file.")
     else:
-        logger.info("No .env file present in project root.")
+        # Expected when installed as a dependency (e.g. on Databricks); stay quiet.
+        logger.debug("No .env file found.")
 except Exception:
-    logger.info("No .env file loaded.")
+    logger.debug("No .env file loaded.")
 
 __all__ = [
     "DataConnector",

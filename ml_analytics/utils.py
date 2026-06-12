@@ -24,12 +24,15 @@ def get_logger(name: str) -> logging.Logger:
     logger = logging.getLogger(name)
     logger.setLevel(logging.INFO)
 
-    if not logger.hasHandlers():
+    # Check the logger's own handlers, not hasHandlers(): hasHandlers() walks up
+    # to the root logger, which is pre-configured in environments like Databricks,
+    # leaving our messages with the root handler's raw "LEVEL:name:message" format.
+    if not logger.handlers:
         console_handler = logging.StreamHandler()
         formatter = logging.Formatter(fmt="%(asctime)s - %(message)s", datefmt="%Y-%m-%d %H:%M:%S")
         console_handler.setFormatter(formatter)
         logger.addHandler(console_handler)
-        logger.propagate = False
+    logger.propagate = False
 
     return logger
 
@@ -71,7 +74,7 @@ def get_credential_value(name, scope="ml"):
     raise Exception(f"Credential or variable '{name}' not found in environment variables or SecretProvider mount file.")
 
 
-def find_project_root(marker_files: list[str] = None) -> Path:
+def find_project_root(marker_files: list[str] = None, required: bool = True) -> Path | None:
     """
     Finds the project root directory by searching upwards for marker files/dirs.
 
@@ -80,12 +83,16 @@ def find_project_root(marker_files: list[str] = None) -> Path:
 
     Args:
         marker_files: A list of filenames or directory names that indicate the project root.
+        required: If False, return None instead of logging an error and raising
+            when no project root is found (e.g. when the package is installed in
+            site-packages on Databricks).
 
     Returns:
-        The absolute path to the project root as a Path object.
+        The absolute path to the project root as a Path object, or None when
+        ``required=False`` and no root is found.
 
     Raises:
-        FileNotFoundError: If the project root cannot be determined.
+        FileNotFoundError: If the project root cannot be determined and ``required=True``.
     """
 
     logger = get_logger("ml_analytics.utils.find_project_root")
@@ -125,6 +132,9 @@ def find_project_root(marker_files: list[str] = None) -> Path:
             current_dir = parent_dir
 
     error_message = f"Could not find project root. Searched upwards from {start_dirs} for markers: {marker_files}"
+    if not required:
+        logger.debug(error_message)
+        return None
     log_and_raise_error(logger, error_message, FileNotFoundError)
 
 
