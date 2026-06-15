@@ -105,6 +105,47 @@ def test_key_pair_options_from_secrets(monkeypatch):
     )
 
 
+def test_secret_scope_inferred_from_databricks_user(monkeypatch):
+    """With no env vars or args, the scope is inferred from the Databricks user."""
+    _clear_snowflake_env(monkeypatch)
+
+    scope = "user-your.name@example.com"
+    pem = "-----BEGIN ENCRYPTED PRIVATE KEY-----\nabc\n-----END ENCRYPTED PRIVATE KEY-----"
+    dbutils = MagicMock()
+    dbutils.secrets = _DatabricksSecretsMock(
+        {
+            (scope, "SNOWFLAKE_ACCOUNT"): "dr06406.eu-west-1",
+            (scope, "snowflake_user"): "your.name@example.com",
+            (scope, "SNOWFLAKE_DATABASE"): "DEEP_PURPLE",
+            (scope, "SNOWFLAKE_SCHEMA"): "CDS",
+            (scope, "SNOWFLAKE_WAREHOUSE"): "ANALYTICS_S_WH",
+            (scope, "SNOWFLAKE_ROLE"): "SNOWFLAKE_STND_DATA",
+            (scope, "snowflake_key"): pem,
+            (scope, "snowflake_key_pass"): "key-pass",
+        }
+    )
+    # dbutils.notebook.entry_point.getDbutils().notebook().getContext().userName().get()
+    ctx = dbutils.notebook.entry_point.getDbutils.return_value.notebook.return_value.getContext.return_value
+    ctx.userName.return_value.get.return_value = "your.name@example.com"
+    monkeypatch.setattr(builtins, "dbutils", dbutils, raising=False)
+
+    with patch(
+        "ml_analytics.sf_connector._load_private_key_pem_for_spark",
+        return_value="spark-key",
+    ):
+        options = SFConnector().spark_options()
+
+    assert options == {
+        "sfUrl": "dr06406.eu-west-1.snowflakecomputing.com",
+        "sfUser": "your.name@example.com",
+        "sfDatabase": "DEEP_PURPLE",
+        "sfSchema": "CDS",
+        "sfWarehouse": "ANALYTICS_S_WH",
+        "sfRole": "SNOWFLAKE_STND_DATA",
+        "pem_private_key": "spark-key",
+    }
+
+
 def test_full_url_is_not_double_suffixed(monkeypatch):
     _clear_snowflake_env(monkeypatch)
     sf = SFConnector(account="https://acct.eu-west-1.snowflakecomputing.com/", user="u")

@@ -47,6 +47,10 @@ def _snowflake_secret_scope(scope: str = None, user: str = None) -> str | None:
         return configured_scope
 
     user = _clean_env_value(user or os.getenv("SNOWFLAKE_USER"))
+    if not user:
+        # On Databricks, fall back to the current notebook user's email so the
+        # connector works with no env vars or constructor args.
+        user = _databricks_current_user()
     if user and "@" in user:
         return f"user-{user}"
 
@@ -82,6 +86,24 @@ def _get_databricks_dbutils():
         pass
 
     return None
+
+
+def _databricks_current_user() -> str | None:
+    """
+    Return the current Databricks user's email, or None when unavailable.
+
+    Used as a last-resort fallback to infer the personal secret scope
+    (``user-<email>``) when no scope/user is provided via argument or env var.
+    """
+    dbutils = _get_databricks_dbutils()
+    if dbutils is None:
+        return None
+
+    try:
+        ctx = dbutils.notebook.entry_point.getDbutils().notebook().getContext()
+        return _clean_env_value(ctx.userName().get())
+    except Exception:
+        return None
 
 
 def _get_databricks_secret(key: str, scope: str = None):

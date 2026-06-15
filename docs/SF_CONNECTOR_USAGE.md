@@ -81,7 +81,23 @@ sf = SFConnector(secret_scope="team-analytics")
 
 The scope is resolved in this order: `secret_scope` argument →
 `SNOWFLAKE_SECRET_SCOPE` → `ML_ANALYTICS_SNOWFLAKE_SECRET_SCOPE` →
-`DATABRICKS_SECRET_SCOPE` → `user-<SNOWFLAKE_USER>` when the user is an email.
+`DATABRICKS_SECRET_SCOPE` → `user-<SNOWFLAKE_USER>` when the user is an email →
+`user-<current Databricks user email>` (auto-detected from the notebook context).
+
+The last fallback means that on Databricks you can store **everything**
+(account, user, connection settings, key) as personal-scope secrets and call
+`SFConnector()` with no arguments and no env vars — the scope is inferred from
+whoever is running the notebook:
+
+```python
+from ml_analytics import SFConnector
+
+sf = SFConnector()  # scope = user-<your Databricks email>, all values from secrets
+df = sf.sql("SELECT * FROM cds.dim_tutor LIMIT 1000")
+```
+
+This requires the `account` and `user` values to be resolvable from secrets too,
+e.g. `SNOWFLAKE_ACCOUNT` and `snowflake_user` stored in your scope.
 
 #### Key-pair from a file or PEM string
 
