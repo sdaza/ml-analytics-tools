@@ -9,6 +9,7 @@ from .data_connector import DataConnector
 from .gsheet_connector import GSheet
 from .model_manager import ModelManager
 from .s3_connector import S3Connector
+from .sf_connector import SFConnector
 from .slack_connector import SlackConnector
 from .utils import (
     execute_sql_scripts,
@@ -50,5 +51,6 @@ __all__ = [
     "log_and_raise_error",
     "ModelManager",
     "S3Connector",
+    "SFConnector",
     "SlackConnector",
 ]

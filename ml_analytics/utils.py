@@ -131,10 +131,10 @@ def find_project_root(marker_files: list[str] = None, required: bool = True) -> 
                 break
             current_dir = parent_dir
 
-    error_message = f"Could not find project root. Searched upwards from {start_dirs} for markers: {marker_files}"
     if not required:
-        logger.debug(error_message)
+        # Expected when installed as a dependency (e.g. on Databricks); stay quiet.
         return None
+    error_message = f"Could not find project root. Searched upwards from {start_dirs} for markers: {marker_files}"
     log_and_raise_error(logger, error_message, FileNotFoundError)
 
 
