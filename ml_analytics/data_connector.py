@@ -47,6 +47,10 @@ def _snowflake_secret_scope(scope: str = None, user: str = None) -> str | None:
         return configured_scope
 
     user = _clean_env_value(user or os.getenv("SNOWFLAKE_USER"))
+    if not user:
+        # On Databricks, fall back to the current notebook user's email so the
+        # connector works with no env vars or constructor args.
+        user = _databricks_current_user()
     if user and "@" in user:
         return f"user-{user}"
 
@@ -82,6 +86,24 @@ def _get_databricks_dbutils():
         pass
 
     return None
+
+
+def _databricks_current_user() -> str | None:
+    """
+    Return the current Databricks user's email, or None when unavailable.
+
+    Used as a last-resort fallback to infer the personal secret scope
+    (``user-<email>``) when no scope/user is provided via argument or env var.
+    """
+    dbutils = _get_databricks_dbutils()
+    if dbutils is None:
+        return None
+
+    try:
+        ctx = dbutils.notebook.entry_point.getDbutils().notebook().getContext()
+        return _clean_env_value(ctx.userName().get())
+    except Exception:
+        return None
 
 
 def _get_databricks_secret(key: str, scope: str = None):
@@ -690,7 +712,9 @@ class DataConnector:
             return loaded
         return query
 
-    def execute_sql(self, query: str, fetch_result: bool = False, fetch_all: bool = False, **kwargs):
+    def execute_sql(
+        self, query: str, fetch_one: bool = False, fetch_all: bool = False, fetch_result: bool = False, **kwargs
+    ):
         """
         Execute a SQL query with automatic connection management and activity tracking.
 
@@ -708,13 +732,15 @@ class DataConnector:
         query : str
             The SQL query to execute, or a path to a .sql file (relative to project root).
             If a .sql file path is provided, its contents are loaded automatically.
-        fetch_result : bool, optional
+        fetch_one : bool, optional
             If True, fetches and returns a single row result using fetchone().
             Defaults to False.
         fetch_all : bool, optional
             If True, fetches and returns all rows using fetchall().
-            Takes precedence over fetch_result if both are True.
+            Takes precedence over fetch_one if both are True.
             Defaults to False.
+        fetch_result : bool, optional
+            Deprecated alias for fetch_one. Defaults to False.
         **kwargs
             Template variables to substitute in the SQL file using str.format().
 
@@ -722,7 +748,7 @@ class DataConnector:
         -------
         tuple, list of tuples, or None
             - If fetch_all=True: list of row tuples
-            - If fetch_result=True: single row tuple
+            - If fetch_one=True: single row tuple
             - Otherwise: None
 
         Examples
@@ -734,7 +760,7 @@ class DataConnector:
         dc.execute_sql("queries/create_table.sql")
 
         # Execute query and fetch single result
-        result = dc.execute_sql("SELECT COUNT(*) FROM test", fetch_result=True)
+        result = dc.execute_sql("SELECT COUNT(*) FROM test", fetch_one=True)
         count = result[0]  # Get the count value
 
         # Execute query and fetch all results
@@ -749,7 +775,7 @@ class DataConnector:
             self.cursor.execute(query)
             if fetch_all:
                 return self.cursor.fetchall()
-            elif fetch_result:
+            elif fetch_one or fetch_result:
                 return self.cursor.fetchone()
             return None
         finally:
@@ -1049,7 +1075,7 @@ class DataConnector:
                 AND tablename = '{table_name}'
                 )
             """
-            result = self.execute_sql(check_sql, fetch_result=True)
+            result = self.execute_sql(check_sql, fetch_one=True)
             exists = result[0]
             return exists
         finally:
@@ -1952,7 +1978,7 @@ class DataConnector:
                     AND tablename = '{table_name}'
                 )
             """
-            result = self.execute_sql(check_sql, fetch_result=True)
+            result = self.execute_sql(check_sql, fetch_one=True)
             exists = result[0]
             return exists
         finally:

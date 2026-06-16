@@ -16,6 +16,7 @@ arguments.
 ## What Is Included
 
 - `DataConnector`: run Redshift or Snowflake SQL, load SQL files, unload/load data through S3, and create Redshift tables from DataFrames.
+- `SFConnector`: read and write Snowflake through Spark (Databricks). PySpark is imported lazily, so the rest of the package works without it.
 - `S3Connector`: read, write, list, delete, and query S3 data with DuckDB.
 - `GSheet`: read, write, share, and export Google Sheets data.
 - `SlackConnector`: send messages, upload files, and manage simple Slack interactions.
@@ -62,6 +63,7 @@ SNOWFLAKE_ACCOUNT=your-account
 SNOWFLAKE_WAREHOUSE=ANALYTICS_S_WH
 SNOWFLAKE_DATABASE=ANALYTICS_DB
 SNOWFLAKE_SCHEMA=PUBLIC
+SNOWFLAKE_ROLE=SNOWFLAKE_STND_DATA
 SNOWFLAKE_AUTHENTICATOR=externalbrowser
 
 # Browser-free Snowflake auth for local or Databricks jobs
@@ -156,6 +158,32 @@ df = (
 )
 ```
 
+### Query Snowflake With Spark (`SFConnector`)
+
+On Databricks, `SFConnector` reads and writes Snowflake directly as Spark
+DataFrames. It reuses the same `SNOWFLAKE_*` settings and key-pair secrets as
+`DataConnector`, and only imports PySpark when a query/write method runs.
+
+```python
+from ml_analytics import SFConnector
+
+sf = SFConnector()  # reads SNOWFLAKE_* env vars; secret scope inferred from SNOWFLAKE_USER
+
+# Spark DataFrame
+df = sf.sql("SELECT * FROM cds.dim_tutor LIMIT 1000")
+
+# pandas DataFrame
+pdf = sf.sql("SELECT 1 AS col_1", return_pandas=True)
+
+# Write a Spark DataFrame back to Snowflake
+sf.save_table(df, "cds.my_table", mode="overwrite")
+```
+
+Credentials resolve per field as: explicit argument → `SNOWFLAKE_*` environment
+variable → Databricks secret. See the
+[Snowflake Spark Connector](docs/SF_CONNECTOR_USAGE.md) guide for credential
+setup and all options.
+
 ### Create A Redshift Table From A DataFrame
 
 ```python
@@ -241,6 +269,7 @@ slack.send_message(channel="#ml-alerts", text="Training finished")
 | --- | --- |
 | [AWS Authentication](docs/AWS_AUTHENTICATION.md) | AWS SSO setup and Python helpers |
 | [CLI Commands](docs/CLI_COMMANDS.md) | Available console commands |
+| [Snowflake Spark Connector](docs/SF_CONNECTOR_USAGE.md) | `SFConnector` credential setup, reads, and writes on Spark/Databricks |
 | [Google Sheets](docs/GSHEET_CONNECTOR_USAGE.md) | Sheets setup, sharing, exports, and examples |
 | [Slack](docs/SLACK_CONNECTOR_USAGE.md) | Slack token setup and message/file examples |
 | [Tunnel Manager](docs/TUNNEL_MANAGER.md) | SSH tunnel configuration and CLI usage |
