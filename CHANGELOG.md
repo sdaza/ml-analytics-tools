@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.4.2](https://github.com/sdaza/ml-analytics-tools/compare/ml-analytics-tools-v0.4.1...ml-analytics-tools-v0.4.2) (2026-06-16)
+
+
+### Bug Fixes
+
+* **docs:** update SFConnector documentation for Unity Catalog support and SQL file queries ([8d6514c](https://github.com/sdaza/ml-analytics-tools/commit/8d6514c90d45fc44551eaa599b63917a33ca9b2e))
+* **sf_connector:** enhance SFConnector with query resolution and Unity Catalog support ([6ee4c9b](https://github.com/sdaza/ml-analytics-tools/commit/6ee4c9bfdb9c611a565193ded0bc982c5b50dcdf))
+
 ## [0.4.1](https://github.com/sdaza/ml-analytics-tools/compare/ml-analytics-tools-v0.4.0...ml-analytics-tools-v0.4.1) (2026-06-16)
 
 
