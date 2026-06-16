@@ -949,7 +949,7 @@ class TestGSheetOAuth:
             monkeypatch.delenv(var, raising=False)
         monkeypatch.setenv("GOOGLE_OAUTH_CLIENT_ID", "cid.apps.googleusercontent.com")
         monkeypatch.setenv("GOOGLE_OAUTH_CLIENT_SECRET", "GOCSPX-secret")
-        monkeypatch.setenv("GOOGLE_CLOUD_PROJECT", "preply-gworkspace-cli")
+        monkeypatch.setenv("GOOGLE_CLOUD_PROJECT", "my-gcp-project")
         monkeypatch.setenv("GSHEET_TOKEN_PATH", str(token_path))
 
     def test_oauth_runs_flow_when_no_token(self, monkeypatch, tmp_path, mock_google_api_services):
