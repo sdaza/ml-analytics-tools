@@ -1,12 +1,13 @@
 # Snowflake Spark Connector
 
-`SFConnector` reads from and writes to Snowflake through Spark
-(`spark.read.format("snowflake")`), which is the right tool on Databricks. It is
-distinct from `DataConnector`, which talks to Snowflake/Redshift through the
-pure-Python `snowflake-connector-python` / `redshift-connector` drivers.
+`SFConnector` reads from Snowflake through Spark
+(`spark.read.format("snowflake")`) and can persist results into Databricks Unity
+Catalog tables, which is the right tool on Databricks. It is distinct from
+`DataConnector`, which talks to Snowflake/Redshift through the pure-Python
+`snowflake-connector-python` / `redshift-connector` drivers.
 
 PySpark is **not** a dependency of this package. `SFConnector` imports it lazily,
-only when a method that needs a Spark session runs (`sql`, `save_table`). You
+only when a method that needs a Spark session runs (`sql`, `save_to_uc`). You
 can import and construct the connector anywhere; running a
 query off a Spark runtime raises a clear `ImportError`.
 
@@ -47,8 +48,10 @@ The connector picks an auth method based on what it can resolve, in this order:
    for Databricks and any non-interactive job.
 2. **OAuth token** — when `SNOWFLAKE_TOKEN` is set.
 3. **Password** — when `SNOWFLAKE_PASSWORD` is set.
-4. **Authenticator** — e.g. `SNOWFLAKE_AUTHENTICATOR=externalbrowser` (interactive;
-   not suitable for Spark jobs — the connector logs a warning).
+4. **Authenticator** — a non-interactive authenticator. `externalbrowser` is
+   **not supported** here: it is interactive and Spark jobs block on the browser
+   SSO handshake, so `SFConnector` raises a clear error instead of hanging. Use
+   key-pair / OAuth for Spark, or `DataConnector` for interactive local queries.
 
 #### Key-pair on Databricks (recommended)
 
@@ -127,10 +130,44 @@ df.display()
 
 # pandas DataFrame
 pdf = sf.sql("SELECT 1 AS col_1", return_pandas=True)
-
-# Write a Spark DataFrame back to Snowflake
-sf.save_table(df, "cds.my_table", mode="overwrite")  # or mode="append"
 ```
+
+### Running a query from a `.sql` file
+
+`sql()` accepts either inline SQL or a path to a `.sql` file (relative to the
+project root); a path ending in `.sql` is loaded automatically. Pass keyword
+arguments to substitute `{placeholders}` in the file via `str.format()`:
+
+```python
+df = sf.sql("queries/dim_tutor.sql")                 # load + run a file
+df = sf.sql("queries/experiment.sql", days=14)       # with {days} templating
+```
+
+### Saving results to Unity Catalog
+
+Persist a result into a Databricks Unity Catalog table with Spark's native
+`saveAsTable`. Do it inline while pulling the data with `save_table=True`, or
+call `save_to_uc()` on any Spark DataFrame:
+
+```python
+# inline: pull from Snowflake and write to analytics.cr_subs in one call
+sf.sql(
+    "queries/cr_to_subscribers.sql",
+    save_table=True,
+    schema="analytics",
+    table="cr_subs",
+    mode="overwrite",          # overwrite | append | ignore | error
+)
+
+# explicit save of an existing Spark DataFrame
+sf.save_to_uc(df, table="cr_subs", schema="analytics", catalog="prod")
+
+# a fully-qualified table name passes through untouched
+sf.save_to_uc(df, table="prod.analytics.cr_subs")
+```
+
+`save_to_uc` writes a managed Unity Catalog table — it does **not** write back to
+Snowflake.
 
 On Databricks the active Spark session is detected and used automatically — you
 do not need to create or pass one.
@@ -138,7 +175,7 @@ do not need to create or pass one.
 ### Extra Snowflake options
 
 Pass any additional Snowflake Spark options through `extra_options`; they
-override the resolved defaults and apply to every read and write:
+override the resolved defaults and apply to every Snowflake read:
 
 ```python
 sf = SFConnector(extra_options={"sfTimezone": "UTC"})
@@ -163,9 +200,9 @@ sf.spark_options(include_private_key=False)
 | `database`, `schema`, `warehouse`, `role` | Standard connection settings; fall back to matching `SNOWFLAKE_*`. |
 | `password` | Password authentication (ignored when a key or token is present). |
 | `token` | OAuth token. Falls back to `SNOWFLAKE_TOKEN`. |
-| `authenticator` | Snowflake authenticator (e.g. `externalbrowser`). |
+| `authenticator` | Snowflake authenticator (e.g. `oauth`). Interactive `externalbrowser` is rejected — it blocks Spark jobs. |
 | `private_key`, `private_key_path`, `private_key_passphrase` | Key-pair material (PEM string, file path, passphrase). |
 | `secret_scope` | Databricks secret scope. Inferred from the user email when omitted. |
 | `source_format` | Spark data source name. Defaults to `net.snowflake.spark.snowflake`; pass `"snowflake"` for the Databricks short alias. |
-| `extra_options` | Extra Snowflake Spark options merged into every read/write. |
+| `extra_options` | Extra Snowflake Spark options merged into every Snowflake read. |
 | `spark` | Optional `SparkSession`. Rarely needed — the active session is detected automatically on Databricks. |

@@ -16,7 +16,7 @@ arguments.
 ## What Is Included
 
 - `DataConnector`: run Redshift or Snowflake SQL, load SQL files, unload/load data through S3, and create Redshift tables from DataFrames.
-- `SFConnector`: read and write Snowflake through Spark (Databricks). PySpark is imported lazily, so the rest of the package works without it.
+- `SFConnector`: read Snowflake through Spark and save results to Unity Catalog tables (Databricks). PySpark is imported lazily, so the rest of the package works without it.
 - `S3Connector`: read, write, list, delete, and query S3 data with DuckDB.
 - `GSheet`: read, write, share, and export Google Sheets data.
 - `SlackConnector`: send messages, upload files, and manage simple Slack interactions.
@@ -133,7 +133,8 @@ df = dc.sql("SELECT 1 AS col_1")
 
 For local interactive work, `SNOWFLAKE_AUTHENTICATOR=externalbrowser` is supported.
 SSO tokens are cached in the OS keychain, so the browser login only happens once
-per token lifetime.
+per token lifetime. (Note: `externalbrowser` works with `DataConnector` only;
+`SFConnector` rejects it, since Spark jobs block on the interactive browser SSO.)
 For Databricks and Spark jobs, use key-pair auth instead. The connector reads
 default Databricks personal-scope secrets automatically:
 
@@ -160,9 +161,10 @@ df = (
 
 ### Query Snowflake With Spark (`SFConnector`)
 
-On Databricks, `SFConnector` reads and writes Snowflake directly as Spark
-DataFrames. It reuses the same `SNOWFLAKE_*` settings and key-pair secrets as
-`DataConnector`, and only imports PySpark when a query/write method runs.
+On Databricks, `SFConnector` reads Snowflake directly as Spark DataFrames and can
+persist results into Unity Catalog tables. It reuses the same `SNOWFLAKE_*`
+settings and key-pair secrets as `DataConnector`, and only imports PySpark when a
+query/write method runs.
 
 ```python
 from ml_analytics import SFConnector
@@ -175,8 +177,14 @@ df = sf.sql("SELECT * FROM cds.dim_tutor LIMIT 1000")
 # pandas DataFrame
 pdf = sf.sql("SELECT 1 AS col_1", return_pandas=True)
 
-# Write a Spark DataFrame back to Snowflake
-sf.save_table(df, "cds.my_table", mode="overwrite")
+# run a query from a .sql file (relative to project root), with templating
+df = sf.sql("queries/experiment.sql", days=14)
+
+# pull and save the result to a Unity Catalog table in one call
+sf.sql("queries/experiment.sql", save_table=True, schema="analytics", table="exp")
+
+# or save any Spark DataFrame to Unity Catalog
+sf.save_to_uc(df, table="exp", schema="analytics", catalog="prod")
 ```
 
 Credentials resolve per field as: explicit argument → `SNOWFLAKE_*` environment
