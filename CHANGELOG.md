@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.4.3](https://github.com/sdaza/ml-analytics-tools/compare/ml-analytics-tools-v0.4.2...ml-analytics-tools-v0.4.3) (2026-06-16)
+
+
+### Bug Fixes
+
+* **utils:** enhance load_sql_query to support fallback paths for SQL files ([bdc72d8](https://github.com/sdaza/ml-analytics-tools/commit/bdc72d80758fdeac07fd8ce5f4cd46d8a82ace26))
+
 ## [0.4.2](https://github.com/sdaza/ml-analytics-tools/compare/ml-analytics-tools-v0.4.1...ml-analytics-tools-v0.4.2) (2026-06-16)
 
 
