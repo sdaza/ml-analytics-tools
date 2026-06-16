@@ -69,6 +69,24 @@ def _get_dbutils():
 
     _DBUTILS_RESOLVED = True
     try:
+        import builtins
+
+        _DBUTILS = getattr(builtins, "dbutils", None)
+        if _DBUTILS is not None:
+            return _DBUTILS
+    except Exception:
+        pass
+
+    try:
+        import __main__
+
+        _DBUTILS = getattr(__main__, "dbutils", None)
+        if _DBUTILS is not None:
+            return _DBUTILS
+    except Exception:
+        pass
+
+    try:
         from databricks.sdk.runtime import dbutils
 
         _DBUTILS = dbutils
@@ -87,6 +105,29 @@ def _get_dbutils():
         _DBUTILS = None
 
     return _DBUTILS
+
+
+def _databricks_notebook_dir() -> Path | None:
+    """
+    Return the active Databricks notebook's workspace filesystem directory.
+
+    Databricks sets Python's cwd to the driver directory in many notebook/job
+    contexts, so relative workspace files need the notebook path as an anchor.
+    """
+    dbutils = _get_dbutils()
+    if dbutils is None:
+        return None
+
+    try:
+        ctx = dbutils.notebook.entry_point.getDbutils().notebook().getContext()
+        notebook_path = ctx.notebookPath().get()
+    except Exception:
+        return None
+
+    if not notebook_path:
+        return None
+
+    return (Path("/Workspace") / str(notebook_path).lstrip("/")).parent
 
 
 def get_credential_value(name, scope="ml"):
@@ -367,21 +408,37 @@ def get_sql_files(relative_folder: str, pipeline: str | None = None) -> dict[str
 
 def load_sql_query(query_path: str, **kwargs) -> str | None:
     """
-    Load a SQL query from a file relative to the project root.
+    Load a SQL query from a file.
+
+    Relative paths are resolved from the project root first, then the current
+    working directory, then the active Databricks notebook directory when
+    available.
     """
     logger = get_logger("ml_analytics.utils.load_sql_query")
 
     try:
-        project_root = find_project_root()
-        absolute_file_path = project_root / query_path
-        if not absolute_file_path.exists():
-            logger.error(f"SQL file '{query_path}' not found at '{absolute_file_path}'.")
-            return None
-        with open(absolute_file_path) as file:
-            sql_query = file.read().format(**kwargs)
-        return sql_query
-    except FileNotFoundError:
-        logger.error("Could not load SQL query because project root was not found.")
+        path = Path(query_path).expanduser()
+        if path.is_absolute():
+            candidate_paths = [path]
+        else:
+            candidate_paths = []
+            project_root = find_project_root(required=False)
+            if project_root is not None:
+                candidate_paths.append(project_root / path)
+            candidate_paths.append(Path.cwd() / path)
+            notebook_dir = _databricks_notebook_dir()
+            if notebook_dir is not None:
+                candidate_paths.append(notebook_dir / path)
+
+        checked_paths = []
+        for absolute_file_path in dict.fromkeys(candidate_paths):
+            checked_paths.append(str(absolute_file_path))
+            if not absolute_file_path.exists():
+                continue
+            with open(absolute_file_path) as file:
+                return file.read().format(**kwargs)
+
+        logger.error(f"SQL file '{query_path}' not found. Checked: {checked_paths}.")
         return None
     except Exception as e:
         logger.error(f"Error loading SQL query {query_path}: {e}", exc_info=True)

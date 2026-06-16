@@ -4,7 +4,7 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-from ml_analytics.utils import execute_sql_scripts, get_sql_files
+from ml_analytics.utils import execute_sql_scripts, get_sql_files, load_sql_query
 
 SQL_FOLDER_NAME = "queries"
 
@@ -128,6 +128,33 @@ class TestGetSqlFilesYamlMode:
         sql_folder = project_root / SQL_FOLDER_NAME
         assert result["beta"] == sql_folder / "beta.sql"
         assert result["alpha"] == sql_folder / "alpha.sql"
+
+
+class TestLoadSqlQuery:
+    def test_relative_path_falls_back_to_cwd_without_project_root(self, monkeypatch, tmp_path):
+        sql_file = tmp_path / "sql" / "experiment.sql"
+        sql_file.parent.mkdir()
+        sql_file.write_text("SELECT {n} AS n")
+
+        monkeypatch.chdir(tmp_path)
+        monkeypatch.setattr("ml_analytics.utils.find_project_root", lambda *args, **kwargs: None)
+        monkeypatch.setattr("ml_analytics.utils._databricks_notebook_dir", lambda: None)
+
+        assert load_sql_query("sql/experiment.sql", n=7) == "SELECT 7 AS n"
+
+    def test_relative_path_falls_back_to_databricks_notebook_dir(self, monkeypatch, tmp_path):
+        driver_dir = tmp_path / "driver"
+        notebook_dir = tmp_path / "Workspace" / "Users" / "me" / "exploring"
+        sql_file = notebook_dir / "sql" / "experiment.sql"
+        driver_dir.mkdir()
+        sql_file.parent.mkdir(parents=True)
+        sql_file.write_text("SELECT 1")
+
+        monkeypatch.chdir(driver_dir)
+        monkeypatch.setattr("ml_analytics.utils.find_project_root", lambda *args, **kwargs: None)
+        monkeypatch.setattr("ml_analytics.utils._databricks_notebook_dir", lambda: notebook_dir)
+
+        assert load_sql_query("sql/experiment.sql") == "SELECT 1"
 
 
 # ---------------------------------------------------------------------------
