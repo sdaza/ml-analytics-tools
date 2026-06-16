@@ -49,16 +49,75 @@ def log_and_raise_error(logger: logging.Logger, message: str, exception_type: ty
     raise exception_type(message)
 
 
+_DBUTILS = None
+_DBUTILS_RESOLVED = False
+
+
+def _get_dbutils():
+    """
+    Return a Databricks ``dbutils`` handle if running on Databricks, else None.
+
+    Resolved lazily and cached. Imposes no hard dependency on Databricks: tries
+    ``databricks.sdk.runtime`` (preinstalled on the Databricks runtime, works in
+    both notebooks and jobs), then falls back to a notebook-injected ``dbutils``
+    global. Returns None anywhere else (e.g. local or non-Spark environments),
+    so callers can simply skip the secret-scope lookup.
+    """
+    global _DBUTILS, _DBUTILS_RESOLVED
+    if _DBUTILS_RESOLVED:
+        return _DBUTILS
+
+    _DBUTILS_RESOLVED = True
+    try:
+        from databricks.sdk.runtime import dbutils
+
+        _DBUTILS = dbutils
+        return _DBUTILS
+    except Exception:
+        pass
+
+    # Fallback: dbutils injected into the notebook's interactive namespace.
+    try:
+        import IPython
+
+        ip = IPython.get_ipython()
+        if ip is not None:
+            _DBUTILS = ip.user_ns.get("dbutils")
+    except Exception:
+        _DBUTILS = None
+
+    return _DBUTILS
+
+
 def get_credential_value(name, scope="ml"):
     """
-    Get the value of the credential or variable called "name" in different environments
+    Get the value of the credential or variable called "name" in different environments.
+
+    Resolution order (first hit wins):
+        1. Environment variable ``name`` — works everywhere; primary path for
+           local/non-Spark environments and allows overriding other sources.
+        2. Databricks secret scope via ``dbutils.secrets.get(scope, name)`` —
+           used automatically when running on Databricks; skipped elsewhere.
+        3. SecretProvider mount file at ``/mnt/<scope>/<name>`` (legacy).
+
     :param name: The name of the variable or credential to load
-    :param scope: The scope of the SecretProvider with secrets mounted in '/mnt/<scope>' (default: "ml")
+    :param scope: The Databricks secret scope / SecretProvider mount scope (default: "ml")
     :return: The value of the variable or credential
     """
     value = os.getenv(name)
     if value is not None:
         return value
+
+    # Databricks secret scope (no-op outside Databricks).
+    dbutils = _get_dbutils()
+    if dbutils is not None:
+        try:
+            secret = dbutils.secrets.get(scope=scope, key=name)
+            if secret:
+                return secret
+        except Exception:
+            # Scope/key missing or secrets API unavailable; fall through.
+            pass
 
     file_path = f"/mnt/{scope}/{name}"
     try:
@@ -71,7 +130,10 @@ def get_credential_value(name, scope="ml"):
     except OSError as e:
         raise Exception(f"Error reading the file {file_path}: {e}") from e
 
-    raise Exception(f"Credential or variable '{name}' not found in environment variables or SecretProvider mount file.")
+    raise Exception(
+        f"Credential or variable '{name}' not found in environment variable, "
+        f"Databricks secret scope '{scope}', or SecretProvider mount file."
+    )
 
 
 def find_project_root(marker_files: list[str] = None, required: bool = True) -> Path | None:
