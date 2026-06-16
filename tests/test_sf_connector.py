@@ -176,6 +176,76 @@ def test_extra_options_override(monkeypatch):
     assert options["sfTimezone"] == "UTC"
 
 
+def test_externalbrowser_authenticator_raises(monkeypatch):
+    _clear_snowflake_env(monkeypatch)
+    sf = SFConnector(account="acct", user="u", authenticator="externalbrowser")
+    with pytest.raises(ValueError, match="externalbrowser"):
+        sf.spark_options()
+
+
+def test_resolve_query_inline_passthrough(monkeypatch):
+    _clear_snowflake_env(monkeypatch)
+    sf = SFConnector(account="acct", user="u")
+    assert sf._resolve_query("SELECT 1") == "SELECT 1"
+
+
+def test_resolve_query_loads_sql_file(monkeypatch, tmp_path):
+    _clear_snowflake_env(monkeypatch)
+    sql_file = tmp_path / "q.sql"
+    sql_file.write_text("SELECT {n} AS n")
+    monkeypatch.setattr("ml_analytics.sf_connector.find_project_root", lambda *a, **k: tmp_path, raising=False)
+    monkeypatch.setattr("ml_analytics.utils.find_project_root", lambda *a, **k: tmp_path)
+    sf = SFConnector(account="acct", user="u")
+    assert sf._resolve_query("q.sql", n=5) == "SELECT 5 AS n"
+
+
+def test_resolve_query_missing_file_raises(monkeypatch, tmp_path):
+    _clear_snowflake_env(monkeypatch)
+    monkeypatch.setattr("ml_analytics.utils.find_project_root", lambda *a, **k: tmp_path)
+    sf = SFConnector(account="acct", user="u")
+    with pytest.raises(ValueError, match="Could not load SQL file"):
+        sf._resolve_query("missing.sql")
+
+
+def test_qualified_uc_name_parts():
+    assert SFConnector._qualified_uc_name("t", schema="s", catalog="c") == "c.s.t"
+    assert SFConnector._qualified_uc_name("t", schema="s") == "s.t"
+    assert SFConnector._qualified_uc_name("t") == "t"
+
+
+def test_qualified_uc_name_already_qualified():
+    # A dotted table name is treated as fully qualified; schema/catalog ignored.
+    assert SFConnector._qualified_uc_name("cat.sch.tbl", schema="x", catalog="y") == "cat.sch.tbl"
+
+
+def test_save_to_uc_uses_saveastable(monkeypatch):
+    _clear_snowflake_env(monkeypatch)
+    sf = SFConnector(account="acct", user="u")
+
+    calls = {}
+
+    class _Writer:
+        def mode(self, m):
+            calls["mode"] = m
+            return self
+
+        def saveAsTable(self, name):
+            calls["name"] = name
+
+    class _DF:
+        write = _Writer()
+
+    sf.save_to_uc(_DF(), table="tbl", schema="sch", catalog="cat", mode="append")
+    assert calls == {"mode": "append", "name": "cat.sch.tbl"}
+
+
+def test_save_to_uc_requires_table(monkeypatch):
+    _clear_snowflake_env(monkeypatch)
+    sf = SFConnector(account="acct", user="u")
+    with pytest.raises(ValueError, match="table name is required"):
+        sf.save_to_uc(object(), table="")
+
+
 def test_missing_account_raises(monkeypatch):
     _clear_snowflake_env(monkeypatch)
     with pytest.raises(ValueError):
@@ -247,20 +317,3 @@ def test_sql_return_pandas(monkeypatch):
     sf.sql("select 1", return_pandas=True)
 
     df.toPandas.assert_called_once()
-
-
-def test_save_table(monkeypatch):
-    _clear_snowflake_env(monkeypatch)
-    spark, _ = _mock_spark()
-    sf = SFConnector(account="acct", user="u", password="p", spark=spark)
-
-    df = MagicMock()
-    sf.save_table(df, "cds.my_table", mode="append")
-
-    df.write.format.assert_called_once_with("net.snowflake.spark.snowflake")
-    writer = df.write.format.return_value
-    options_passed = writer.options.call_args.kwargs
-    assert options_passed["dbtable"] == "cds.my_table"
-    assert options_passed["column_mapping"] == "name"
-    writer.options.return_value.mode.assert_called_once_with("append")
-    writer.options.return_value.mode.return_value.save.assert_called_once()

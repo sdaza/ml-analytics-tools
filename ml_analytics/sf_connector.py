@@ -18,7 +18,7 @@ from .data_connector import (
     _load_private_key_pem_for_spark,
     _snowflake_secret_scope,
 )
-from .utils import get_logger, log_and_raise_error
+from .utils import get_logger, load_sql_query, log_and_raise_error
 
 # Cached Spark session shared across SFConnector instances. Populated lazily by
 # get_spark(); never created at import time so the package stays importable
@@ -221,65 +221,125 @@ class SFConnector:
             if self.authenticator:
                 options["sfAuthenticator"] = self.authenticator
         elif self.authenticator:
-            options["sfAuthenticator"] = self.authenticator
             if self.authenticator.lower() == "externalbrowser":
-                self._logger.warning(
-                    "Snowflake externalbrowser authentication is interactive and is not suitable for "
-                    "Databricks/Spark jobs. Use key-pair or OAuth for Spark workloads."
+                log_and_raise_error(
+                    self._logger,
+                    "Snowflake externalbrowser authentication is interactive and cannot be used by "
+                    "SFConnector (Spark jobs block on the browser SSO handshake). Use key-pair "
+                    "(SNOWFLAKE_PRIVATE_KEY/_PATH) or OAuth (SNOWFLAKE_TOKEN) for Spark workloads, "
+                    "or use DataConnector for interactive local queries.",
                 )
+            options["sfAuthenticator"] = self.authenticator
 
         # Caller-provided options win over resolved defaults.
         options.update({k: v for k, v in self.extra_options.items() if _clean_env_value(v) is not None})
         return options
 
-    def sql(self, query: str, return_pandas: bool = False):
+    def _resolve_query(self, query: str, **kwargs) -> str:
+        """Resolve a query string: if it looks like a SQL file path, load it; otherwise return as-is."""
+        if query and query.strip().endswith(".sql"):
+            loaded = load_sql_query(query.strip(), **kwargs)
+            if loaded is None:
+                log_and_raise_error(self._logger, f"Could not load SQL file: {query}")
+            self._logger.info(f"Loaded SQL from file: {query}")
+            return loaded
+        return query
+
+    def sql(
+        self,
+        query: str,
+        return_pandas: bool = False,
+        save_table: bool = False,
+        table: str = None,
+        schema: str = None,
+        catalog: str = None,
+        mode: str = "overwrite",
+        **kwargs,
+    ):
         """
         Execute a SQL query against Snowflake and return the result.
+
+        Optionally persist the result straight into a Databricks Unity Catalog
+        table while pulling the data, by passing ``save_table=True`` along with a
+        destination ``table`` (and optionally ``schema`` / ``catalog``).
 
         Parameters
         ----------
         query : str
-            SQL query to execute.
+            SQL query to execute, or a path to a ``.sql`` file (relative to the
+            project root). When a ``.sql`` path is given, its contents are loaded
+            automatically.
         return_pandas : bool, optional
             If True, return a pandas DataFrame; otherwise return a Spark
             DataFrame. Defaults to False.
+        save_table : bool, optional
+            If True, write the result to a Unity Catalog table via
+            :meth:`save_to_uc` before returning. Defaults to False.
+        table : str, optional
+            Destination table name when ``save_table`` is True. May be fully
+            qualified (``catalog.schema.table``), in which case ``schema`` /
+            ``catalog`` are ignored.
+        schema, catalog : str, optional
+            Unity Catalog schema and catalog to qualify ``table`` with.
+        mode : str, optional
+            Spark write mode for the saved table ('overwrite', 'append',
+            'ignore', 'error'). Defaults to 'overwrite'.
+        **kwargs
+            Template variables substituted into the SQL file using ``str.format()``.
         """
+        query = self._resolve_query(query, **kwargs)
         spark = self._get_spark()
         try:
             df = spark.read.format(self.source_format).options(**self.spark_options()).option("query", query).load()
         except Exception as e:
             log_and_raise_error(self._logger, f"Error reading from Snowflake: {e}")
 
+        if save_table:
+            self.save_to_uc(df, table=table, schema=schema, catalog=catalog, mode=mode)
+
         if return_pandas:
             return df.toPandas()
         return df
 
-    def save_table(self, df, table: str, mode: str = "overwrite", column_mapping: str = "name"):
+    @staticmethod
+    def _qualified_uc_name(table: str, schema: str = None, catalog: str = None) -> str:
+        """Build a Unity Catalog table identifier from its parts.
+
+        A ``table`` that already contains dots is treated as fully qualified and
+        returned as-is; otherwise ``catalog`` / ``schema`` are prepended when given.
         """
-        Write a Spark DataFrame to a Snowflake table.
+        if "." in table:
+            return table
+        parts = [part for part in (catalog, schema, table) if part]
+        return ".".join(parts)
+
+    def save_to_uc(self, df, table: str, schema: str = None, catalog: str = None, mode: str = "overwrite"):
+        """
+        Write a Spark DataFrame to a Databricks Unity Catalog table.
+
+        Uses Spark's native ``df.write.saveAsTable(...)`` (a managed UC table),
+        not the Snowflake connector.
 
         Parameters
         ----------
         df : pyspark.sql.DataFrame
             DataFrame to write.
         table : str
-            Destination table name (``sfDatabase`` / ``sfSchema`` from the
-            connector are used unless the name is fully qualified).
+            Destination table name. May be fully qualified
+            (``catalog.schema.table``), in which case ``schema`` / ``catalog``
+            are ignored.
+        schema, catalog : str, optional
+            Unity Catalog schema and catalog to qualify ``table`` with.
         mode : str, optional
             Spark write mode: 'overwrite', 'append', 'ignore', or 'error'.
             Defaults to 'overwrite'.
-        column_mapping : str, optional
-            Snowflake ``column_mapping`` option ('name' or 'order').
-            Defaults to 'name' so columns are matched by name.
         """
         if not table:
             log_and_raise_error(self._logger, "A destination table name is required.")
 
-        options = self.spark_options()
-        options["dbtable"] = table
-        options["column_mapping"] = column_mapping
+        full_name = self._qualified_uc_name(table, schema=schema, catalog=catalog)
         try:
-            df.write.format(self.source_format).options(**options).mode(mode).save()
+            df.write.mode(mode).saveAsTable(full_name)
         except Exception as e:
-            log_and_raise_error(self._logger, f"Error writing to Snowflake table '{table}': {e}")
-        self._logger.info(f"Table '{table}' written successfully (mode={mode}).")
+            log_and_raise_error(self._logger, f"Error writing to Unity Catalog table '{full_name}': {e}")
+        self._logger.info(f"Table '{full_name}' written to Unity Catalog (mode={mode}).")
