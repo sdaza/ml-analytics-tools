@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.4.1](https://github.com/sdaza/ml-analytics-tools/compare/ml-analytics-tools-v0.4.0...ml-analytics-tools-v0.4.1) (2026-06-16)
+
+
+### Bug Fixes
+
+* **docs:** update GCP project example in README and tests for clarity ([135779f](https://github.com/sdaza/ml-analytics-tools/commit/135779f8fd6adaaa2652310e290537f38fc18ebc))
+* **docs:** update GCP project example in README and tests for clarity ([a90a9de](https://github.com/sdaza/ml-analytics-tools/commit/a90a9deabfa6b58fba7754997265ed1971675a8f))
+
 ## [0.4.0](https://github.com/sdaza/ml-analytics-tools/compare/ml-analytics-tools-v0.3.0...ml-analytics-tools-v0.4.0) (2026-06-16)
 
 
