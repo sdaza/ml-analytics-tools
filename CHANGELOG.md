@@ -1,5 +1,14 @@
 # Changelog
 
+## [0.4.0](https://github.com/sdaza/ml-analytics-tools/compare/ml-analytics-tools-v0.3.0...ml-analytics-tools-v0.4.0) (2026-06-16)
+
+
+### Features
+
+* **SFConnector:** add Spark-based Snowflake connector for reading/writing DataFrames ([84aaf97](https://github.com/sdaza/ml-analytics-tools/commit/84aaf97306841129a33b36c619fb545401f45cfe))
+* **SFConnector:** infer secret scope from Databricks user for seamless usage ([8d06f41](https://github.com/sdaza/ml-analytics-tools/commit/8d06f411604eab3c99359aae4a9e11165deaeea5))
+* **utils:** add lazy loading for Databricks dbutils and enhance credential retrieval ([4405092](https://github.com/sdaza/ml-analytics-tools/commit/4405092bc4c7c48bbfc1c7d1358cb670c9b803c7))
+
 ## [0.3.0](https://github.com/sdaza/ml-analytics-tools/compare/ml-analytics-tools-v0.2.1...ml-analytics-tools-v0.3.0) (2026-06-11)
 
 
