@@ -172,6 +172,116 @@ Snowflake.
 On Databricks the active Spark session is detected and used automatically — you
 do not need to create or pass one.
 
+### Saving YAML-ordered queries to Unity Catalog
+
+Use `save_pipeline_to_uc()` when you have a folder of Snowflake SQL files and
+want each query result saved as a Spark / Unity Catalog table. The YAML controls
+execution order. By default, each destination table uses the SQL file stem.
+
+```python
+from ml_analytics import SFConnector
+
+sf = SFConnector()
+
+df = sf.save_pipeline_to_uc(
+    "queries/churn_pipeline",
+    pipeline="daily",
+    catalog="prod",
+    schema="analytics",
+    mode="overwrite",
+    run_date="2026-06-17",
+)
+```
+
+Example folder:
+
+```text
+queries/churn_pipeline/
+  daily.yaml
+  base.sql
+  features.sql
+  final.sql
+```
+
+```yaml
+# daily.yaml
+steps:
+  - base
+  - features
+  - final
+```
+
+This creates:
+
+```text
+prod.analytics.base
+prod.analytics.features
+prod.analytics.final
+```
+
+Pass `tables` when you want friendlier destination names for specific steps:
+
+```python
+df = sf.save_pipeline_to_uc(
+    "queries/churn_pipeline",
+    pipeline="daily",
+    catalog="prod",
+    schema="analytics",
+    tables={
+        "base": "churn_base",
+        "features": "churn_features",
+        "final": "churn_daily",
+    },
+)
+```
+
+Each SQL file is read from Snowflake through Spark and saved to Unity Catalog
+with `saveAsTable`. The returned value is the final Spark DataFrame; pass
+`return_all=True` to get a dict of every step's DataFrame.
+
+Tables are written as Delta with schema merge enabled by default:
+
+```python
+df.write.format("delta").option("mergeSchema", "true").mode(mode).saveAsTable(...)
+```
+
+Tables are optimized after each save by default:
+
+```sql
+OPTIMIZE prod.analytics.features
+```
+
+Pass `zorder_by="column_name"` (or a list of columns) to add `ZORDER BY`.
+For per-step ZORDER columns, pass a dict:
+
+```python
+sf.save_pipeline_to_uc(
+    "queries/churn_pipeline",
+    pipeline="daily",
+    catalog="prod",
+    schema="analytics",
+    zorder_by={
+        "features": ["customer_id", "event_date"],
+        "final": "customer_id",
+    },
+)
+```
+
+Pass `optimize=False` only when you explicitly want to skip Databricks Delta
+optimization.
+
+You can also set comments while saving:
+
+```python
+sf.save_pipeline_to_uc(
+    "queries/churn_pipeline",
+    pipeline="daily",
+    catalog="prod",
+    schema="analytics",
+    comments={"final": "Individual tutor-level training metrics"},
+)
+```
+
 ### Extra Snowflake options
 
 Pass any additional Snowflake Spark options through `extra_options`; they

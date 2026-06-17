@@ -232,6 +232,7 @@ class DataConnector:
         schema=None,
         role=None,
         authenticator=None,
+        token=None,
         private_key=None,
         private_key_path=None,
         private_key_passphrase=None,
@@ -262,6 +263,7 @@ class DataConnector:
                 schema=schema,
                 role=role,
                 authenticator=authenticator,
+                token=token,
                 private_key=private_key,
                 private_key_path=private_key_path,
                 private_key_passphrase=private_key_passphrase,
@@ -335,6 +337,7 @@ class DataConnector:
         schema=None,
         role=None,
         authenticator=None,
+        token=None,
         private_key=None,
         private_key_path=None,
         private_key_passphrase=None,
@@ -361,6 +364,7 @@ class DataConnector:
         )
         token = _get_snowflake_config_value(
             "SNOWFLAKE_TOKEN",
+            explicit=token,
             secret_scope=secret_scope,
             aliases=("SNOWFLAKE_OAUTH_TOKEN", "SNOWFLAKE_ACCESS_TOKEN"),
         )

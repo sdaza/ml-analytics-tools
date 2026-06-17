@@ -58,6 +58,7 @@ def _mock_spark():
     """Spark double whose read chain returns a DataFrame mock."""
     spark = MagicMock()
     df = MagicMock()
+    df.sparkSession = spark
     reader = spark.read.format.return_value
     reader.options.return_value.option.return_value.load.return_value = df
     reader.options.return_value.load.return_value = df
@@ -220,11 +221,20 @@ def test_qualified_uc_name_already_qualified():
 
 def test_save_to_uc_uses_saveastable(monkeypatch):
     _clear_snowflake_env(monkeypatch)
-    sf = SFConnector(account="acct", user="u")
+    spark = MagicMock()
+    sf = SFConnector(account="acct", user="u", spark=spark)
 
     calls = {}
 
     class _Writer:
+        def format(self, fmt):
+            calls["format"] = fmt
+            return self
+
+        def option(self, key, value):
+            calls["option"] = (key, value)
+            return self
+
         def mode(self, m):
             calls["mode"] = m
             return self
@@ -234,9 +244,42 @@ def test_save_to_uc_uses_saveastable(monkeypatch):
 
     class _DF:
         write = _Writer()
+        sparkSession = spark
 
     sf.save_to_uc(_DF(), table="tbl", schema="sch", catalog="cat", mode="append")
-    assert calls == {"mode": "append", "name": "cat.sch.tbl"}
+    assert calls == {
+        "format": "delta",
+        "option": ("mergeSchema", "true"),
+        "mode": "append",
+        "name": "cat.sch.tbl",
+    }
+    spark.sql.assert_called_once_with("OPTIMIZE cat.sch.tbl")
+
+
+def test_save_to_uc_can_zorder_comment_or_skip_optimize(monkeypatch):
+    _clear_snowflake_env(monkeypatch)
+    spark = MagicMock()
+    sf = SFConnector(account="acct", user="u", spark=spark)
+
+    df = MagicMock()
+    df.sparkSession = spark
+
+    sf.save_to_uc(
+        df,
+        table="tbl",
+        schema="sch",
+        catalog="cat",
+        zorder_by=["customer_id", "event_date"],
+        comment="Tutor's metrics",
+    )
+    assert [call.args[0] for call in spark.sql.call_args_list] == [
+        "ALTER TABLE cat.sch.tbl SET TBLPROPERTIES ('comment' = 'Tutor''s metrics')",
+        "OPTIMIZE cat.sch.tbl ZORDER BY (customer_id, event_date)",
+    ]
+
+    spark.reset_mock()
+    sf.save_to_uc(df, table="tbl", schema="sch", catalog="cat", optimize=False)
+    spark.sql.assert_not_called()
 
 
 def test_save_to_uc_requires_table(monkeypatch):
@@ -317,3 +360,82 @@ def test_sql_return_pandas(monkeypatch):
     sf.sql("select 1", return_pandas=True)
 
     df.toPandas.assert_called_once()
+
+
+def test_save_pipeline_to_uc_uses_yaml_order_and_file_stem_tables(monkeypatch, tmp_path):
+    _clear_snowflake_env(monkeypatch)
+    folder = tmp_path / "queries"
+    folder.mkdir()
+    (folder / "base.sql").write_text("SELECT '{run_date}' AS run_date;")
+    (folder / "features.sql").write_text("SELECT 1 AS feature;")
+    (folder / "daily.yaml").write_text(
+        """
+steps:
+  - features
+  - base
+"""
+    )
+    monkeypatch.setattr("ml_analytics.utils.find_project_root", lambda *args, **kwargs: tmp_path)
+
+    spark, df = _mock_spark()
+    sf = SFConnector(account="acct", user="u", password="p", spark=spark)
+
+    result = sf.save_pipeline_to_uc(
+        "queries",
+        pipeline="daily",
+        catalog="prod",
+        schema="analytics",
+        run_date="2026-06-17",
+    )
+
+    assert result is df
+    query_calls = spark.read.format.return_value.options.return_value.option.call_args_list
+    assert [call.args for call in query_calls] == [
+        ("query", "SELECT 1 AS feature;"),
+        ("query", "SELECT '2026-06-17' AS run_date;"),
+    ]
+    save_calls = df.write.format.return_value.option.return_value.mode.return_value.saveAsTable.call_args_list
+    assert [call.args[0] for call in save_calls] == [
+        "prod.analytics.features",
+        "prod.analytics.base",
+    ]
+    assert [call.args[0] for call in spark.sql.call_args_list] == [
+        "OPTIMIZE prod.analytics.features",
+        "OPTIMIZE prod.analytics.base",
+    ]
+
+
+def test_save_pipeline_to_uc_allows_table_and_mode_overrides(monkeypatch, tmp_path):
+    _clear_snowflake_env(monkeypatch)
+    folder = tmp_path / "queries"
+    folder.mkdir()
+    (folder / "base.sql").write_text("SELECT 1 AS col_1;")
+    (folder / "final.sql").write_text("SELECT 2 AS col_2;")
+    monkeypatch.setattr("ml_analytics.utils.find_project_root", lambda *args, **kwargs: tmp_path)
+
+    spark, df = _mock_spark()
+    sf = SFConnector(account="acct", user="u", password="p", spark=spark)
+
+    result = sf.save_pipeline_to_uc(
+        "queries",
+        schema="analytics",
+        catalog="prod",
+        tables={"final": "churn_daily"},
+        table_prefix="stg_",
+        modes={"final": "append"},
+        zorder_by={"final": "customer_id"},
+        return_all=True,
+    )
+
+    assert result == {"base": df, "final": df}
+    mode_calls = df.write.format.return_value.option.return_value.mode.call_args_list
+    assert [call.args[0] for call in mode_calls] == ["overwrite", "append"]
+    save_calls = df.write.format.return_value.option.return_value.mode.return_value.saveAsTable.call_args_list
+    assert [call.args[0] for call in save_calls] == [
+        "prod.analytics.stg_base",
+        "prod.analytics.churn_daily",
+    ]
+    assert [call.args[0] for call in spark.sql.call_args_list] == [
+        "OPTIMIZE prod.analytics.stg_base",
+        "OPTIMIZE prod.analytics.churn_daily ZORDER BY (customer_id)",
+    ]

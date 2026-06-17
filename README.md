@@ -185,6 +185,14 @@ sf.sql("queries/experiment.sql", save_table=True, schema="analytics", table="exp
 
 # or save any Spark DataFrame to Unity Catalog
 sf.save_to_uc(df, table="exp", schema="analytics", catalog="prod")
+
+# save a YAML-ordered folder of SQL queries as Unity Catalog tables
+df = sf.save_pipeline_to_uc(
+    "queries/churn_pipeline",
+    pipeline="daily",
+    catalog="prod",
+    schema="analytics",
+)
 ```
 
 Credentials resolve per field as: explicit argument → `SNOWFLAKE_*` environment

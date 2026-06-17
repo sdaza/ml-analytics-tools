@@ -624,6 +624,61 @@ def _is_select_statement(statement: str) -> bool:
     return True
 
 
+def resolve_sql_query_paths(query_paths, pipeline: str | None = None) -> dict[str, Path]:
+    """
+    Normalize SQL pipeline input into an ordered mapping of query name to file path.
+
+    Args:
+        query_paths: one of:
+            - str: relative folder path from project root; SQL files are discovered
+              via get_sql_files() (respects pipeline.yaml if present).
+            - Path pointing to a directory: same as str, resolved relative to project root.
+            - Path pointing to a single .sql file: executes that file only.
+            - list[str | Path]: ordered list of individual SQL file paths.
+            - dict[str, str | Path]: explicit ordered mapping of name -> path; preserves insertion order.
+        pipeline: Optional pipeline name passed to get_sql_files() when query_paths is a folder.
+
+    Returns:
+        Ordered dict[str, Path].
+    """
+    logger = get_logger("ml_analytics.utils.resolve_sql_query_paths")
+
+    if isinstance(query_paths, str):
+        try:
+            project_root = find_project_root()
+            candidate = project_root / query_paths
+        except FileNotFoundError:
+            candidate = Path(query_paths)
+        if candidate.is_file():
+            return {candidate.stem: candidate}
+        resolved = get_sql_files(query_paths, pipeline=pipeline)
+        if not resolved:
+            log_and_raise_error(logger, f"No SQL files found for folder '{query_paths}'.")
+        return resolved
+
+    if isinstance(query_paths, Path):
+        if query_paths.is_dir():
+            try:
+                project_root = find_project_root()
+                relative = query_paths.relative_to(project_root)
+            except ValueError:
+                relative = query_paths
+            resolved = get_sql_files(str(relative), pipeline=pipeline)
+            if not resolved:
+                log_and_raise_error(logger, f"No SQL files found in directory '{query_paths}'.")
+            return resolved
+        return {query_paths.stem: query_paths}
+
+    if isinstance(query_paths, list):
+        return {Path(p).stem: Path(p) for p in query_paths}
+
+    if isinstance(query_paths, dict):
+        return {k: Path(v) if isinstance(v, str) else v for k, v in query_paths.items()}
+
+    log_and_raise_error(logger, f"Expected a folder path, list, or dict, got: {type(query_paths)}")
+    return {}
+
+
 def execute_sql_scripts(
     query_paths,
     data_connector=None,
@@ -662,42 +717,7 @@ def execute_sql_scripts(
 
     from ml_analytics.data_connector import DataConnector
 
-    # Normalize input to an ordered dict[str, Path]
-    if isinstance(query_paths, str):
-        try:
-            project_root = find_project_root()
-            candidate = project_root / query_paths
-        except FileNotFoundError:
-            candidate = Path(query_paths)
-        if candidate.is_file():
-            query_paths = {candidate.stem: candidate}
-        else:
-            resolved = get_sql_files(query_paths, pipeline=pipeline)
-            if not resolved:
-                log_and_raise_error(logger, f"No SQL files found for folder '{query_paths}'.")
-                return
-            query_paths = resolved
-    elif isinstance(query_paths, Path):
-        if query_paths.is_dir():
-            try:
-                project_root = find_project_root()
-                relative = query_paths.relative_to(project_root)
-            except ValueError:
-                relative = query_paths
-            resolved = get_sql_files(str(relative), pipeline=pipeline)
-            if not resolved:
-                log_and_raise_error(logger, f"No SQL files found in directory '{query_paths}'.")
-                return
-            query_paths = resolved
-        else:
-            query_paths = {query_paths.stem: query_paths}
-    elif isinstance(query_paths, list):
-        query_paths = {Path(p).stem: Path(p) for p in query_paths}
-    elif isinstance(query_paths, dict):
-        query_paths = {k: Path(v) if isinstance(v, str) else v for k, v in query_paths.items()}
-    else:
-        log_and_raise_error(logger, f"Expected a folder path, list, or dict, got: {type(query_paths)}")
-        return
+    query_paths = resolve_sql_query_paths(query_paths, pipeline=pipeline)
 
     def _run_scripts(dc):
         """Execute all scripts on the given DataConnector instance.

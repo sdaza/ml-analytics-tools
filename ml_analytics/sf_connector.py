@@ -18,7 +18,7 @@ from .data_connector import (
     _load_private_key_pem_for_spark,
     _snowflake_secret_scope,
 )
-from .utils import get_logger, load_sql_query, log_and_raise_error
+from .utils import get_logger, load_sql_query, log_and_raise_error, resolve_sql_query_paths
 
 # Cached Spark session shared across SFConnector instances. Populated lazily by
 # get_spark(); never created at import time so the package stays importable
@@ -254,6 +254,10 @@ class SFConnector:
         schema: str = None,
         catalog: str = None,
         mode: str = "overwrite",
+        optimize: bool = True,
+        zorder_by=None,
+        merge_schema: bool = True,
+        comment: str = None,
         **kwargs,
     ):
         """
@@ -284,6 +288,15 @@ class SFConnector:
         mode : str, optional
             Spark write mode for the saved table ('overwrite', 'append',
             'ignore', 'error'). Defaults to 'overwrite'.
+        optimize : bool, optional
+            If saving to Unity Catalog, run ``OPTIMIZE`` after the write.
+            Defaults to True.
+        zorder_by : str or list[str], optional
+            Optional columns for Delta ``ZORDER BY`` during optimize.
+        merge_schema : bool, optional
+            If saving to Unity Catalog, set Delta ``mergeSchema=true``. Defaults to True.
+        comment : str, optional
+            Optional table comment stored as a Unity Catalog table property.
         **kwargs
             Template variables substituted into the SQL file using ``str.format()``.
         """
@@ -295,11 +308,119 @@ class SFConnector:
             log_and_raise_error(self._logger, f"Error reading from Snowflake: {e}")
 
         if save_table:
-            self.save_to_uc(df, table=table, schema=schema, catalog=catalog, mode=mode)
+            self.save_to_uc(
+                df,
+                table=table,
+                schema=schema,
+                catalog=catalog,
+                mode=mode,
+                optimize=optimize,
+                zorder_by=zorder_by,
+                merge_schema=merge_schema,
+                comment=comment,
+            )
 
         if return_pandas:
             return df.toPandas()
         return df
+
+    def save_pipeline_to_uc(
+        self,
+        query_paths,
+        *,
+        pipeline: str | None = None,
+        catalog: str = None,
+        schema: str = None,
+        tables: dict[str, str] = None,
+        table_prefix: str = "",
+        table_suffix: str = "",
+        mode: str = "overwrite",
+        modes: dict[str, str] = None,
+        optimize: bool = True,
+        zorder_by=None,
+        merge_schema: bool = True,
+        comment: str = None,
+        comments: dict[str, str] = None,
+        return_all: bool = False,
+        **kwargs,
+    ):
+        """
+        Run YAML-ordered Snowflake queries and save each result as a Unity Catalog table.
+
+        This is a convenience wrapper around ``sql(..., save_table=True)``. It
+        uses the same folder/YAML resolution as ``execute_sql_scripts``:
+        ``steps`` define the SQL files to run and their order.
+
+        Parameters
+        ----------
+        query_paths
+            Folder, file, list, or ordered dict of SQL files.
+        pipeline
+            Optional YAML pipeline name.
+        catalog, schema
+            Default Unity Catalog destination for unqualified table names.
+        tables
+            Optional mapping of step name to destination table. Values may be
+            unqualified (using ``catalog`` / ``schema``) or fully qualified.
+        table_prefix, table_suffix
+            Applied to step names when ``tables`` does not define a destination.
+        mode
+            Default Spark write mode for every table.
+        modes
+            Optional mapping of step name to Spark write mode.
+        optimize
+            If True, run ``OPTIMIZE`` after saving each Unity Catalog table.
+        zorder_by
+            Optional columns for Delta ``ZORDER BY``. Pass a dict to configure
+            columns per step, or a string/list to use the same columns for every
+            saved table.
+        merge_schema
+            If True, set Delta ``mergeSchema=true`` for every saved table.
+        comment
+            Optional table comment applied to every saved table.
+        comments
+            Optional mapping of step name to table comment.
+        return_all
+            If True, return a dict of step name to Spark DataFrame. Otherwise
+            return the last step's Spark DataFrame.
+        **kwargs
+            Template variables substituted into SQL files via ``str.format()``.
+        """
+        resolved_paths = resolve_sql_query_paths(query_paths, pipeline=pipeline)
+        if not resolved_paths:
+            log_and_raise_error(self._logger, "No SQL files found for pipeline.")
+
+        tables = tables or {}
+        modes = modes or {}
+        comments = comments or {}
+        results = {}
+        last_df = None
+
+        for name, query_path in resolved_paths.items():
+            destination = tables.get(name) or f"{table_prefix}{name}{table_suffix}"
+            if not destination:
+                log_and_raise_error(self._logger, f"No Unity Catalog table configured for step '{name}'.")
+
+            step_mode = modes.get(name, mode)
+            step_zorder_by = zorder_by.get(name) if isinstance(zorder_by, dict) else zorder_by
+            step_comment = comments.get(name, comment)
+            self._logger.info(f"[{name}] saving to Unity Catalog table {destination} (mode={step_mode}) ...")
+            last_df = self.sql(
+                str(query_path),
+                save_table=True,
+                table=destination,
+                schema=schema,
+                catalog=catalog,
+                mode=step_mode,
+                optimize=optimize,
+                zorder_by=step_zorder_by,
+                merge_schema=merge_schema,
+                comment=step_comment,
+                **kwargs,
+            )
+            results[name] = last_df
+
+        return results if return_all else last_df
 
     @staticmethod
     def _qualified_uc_name(table: str, schema: str = None, catalog: str = None) -> str:
@@ -313,12 +434,91 @@ class SFConnector:
         parts = [part for part in (catalog, schema, table) if part]
         return ".".join(parts)
 
-    def save_to_uc(self, df, table: str, schema: str = None, catalog: str = None, mode: str = "overwrite"):
+    @staticmethod
+    def _zorder_clause(zorder_by=None) -> str:
+        """Build the optional Delta ZORDER BY clause."""
+        if not zorder_by:
+            return ""
+        if isinstance(zorder_by, str):
+            columns = [column.strip() for column in zorder_by.split(",")]
+        else:
+            columns = [str(column).strip() for column in zorder_by]
+        columns = [column for column in columns if column]
+        if not columns:
+            return ""
+        return f" ZORDER BY ({', '.join(columns)})"
+
+    @staticmethod
+    def _sql_string_literal(value: str) -> str:
+        """Escape a value for use inside a single-quoted SQL string literal."""
+        return str(value).replace("'", "''")
+
+    def set_uc_table_comment(self, table: str, comment: str, schema: str = None, catalog: str = None, spark=None):
+        """
+        Set a Unity Catalog table comment using Databricks table properties.
+
+        Parameters
+        ----------
+        table
+            Table name. May be fully qualified.
+        comment
+            Comment text to store.
+        schema, catalog
+            Optional qualifiers when ``table`` is not fully qualified.
+        spark
+            Optional SparkSession to use. Defaults to this connector's Spark session.
+        """
+        full_name = self._qualified_uc_name(table, schema=schema, catalog=catalog)
+        spark = spark or self._get_spark()
+        escaped_comment = self._sql_string_literal(comment)
+        try:
+            spark.sql(f"ALTER TABLE {full_name} SET TBLPROPERTIES ('comment' = '{escaped_comment}')")
+        except Exception as e:
+            log_and_raise_error(self._logger, f"Error setting comment for Unity Catalog table '{full_name}': {e}")
+        self._logger.info(f"Comment set for Unity Catalog table '{full_name}'.")
+
+    def optimize_uc_table(self, table: str, schema: str = None, catalog: str = None, zorder_by=None, spark=None):
+        """
+        Run Databricks Delta ``OPTIMIZE`` on a Unity Catalog table.
+
+        Parameters
+        ----------
+        table
+            Table name. May be fully qualified.
+        schema, catalog
+            Optional qualifiers when ``table`` is not fully qualified.
+        zorder_by
+            Optional column or columns for ``ZORDER BY``.
+        spark
+            Optional SparkSession to use. Defaults to this connector's Spark session.
+        """
+        full_name = self._qualified_uc_name(table, schema=schema, catalog=catalog)
+        spark = spark or self._get_spark()
+        optimize_sql = f"OPTIMIZE {full_name}{self._zorder_clause(zorder_by)}"
+        try:
+            spark.sql(optimize_sql)
+        except Exception as e:
+            log_and_raise_error(self._logger, f"Error optimizing Unity Catalog table '{full_name}': {e}")
+        self._logger.info(f"Table '{full_name}' optimized.")
+
+    def save_to_uc(
+        self,
+        df,
+        table: str,
+        schema: str = None,
+        catalog: str = None,
+        mode: str = "overwrite",
+        optimize: bool = True,
+        zorder_by=None,
+        merge_schema: bool = True,
+        comment: str = None,
+    ):
         """
         Write a Spark DataFrame to a Databricks Unity Catalog table.
 
         Uses Spark's native ``df.write.saveAsTable(...)`` (a managed UC table),
-        not the Snowflake connector.
+        not the Snowflake connector. By default, runs Delta ``OPTIMIZE`` after
+        the write.
 
         Parameters
         ----------
@@ -333,13 +533,31 @@ class SFConnector:
         mode : str, optional
             Spark write mode: 'overwrite', 'append', 'ignore', or 'error'.
             Defaults to 'overwrite'.
+        optimize : bool, optional
+            If True, run ``OPTIMIZE`` after saving. Defaults to True.
+        zorder_by : str or list[str], optional
+            Optional columns for Delta ``ZORDER BY`` during optimize.
+        merge_schema : bool, optional
+            If True, writes as Delta with ``mergeSchema=true``. Defaults to True.
+        comment : str, optional
+            Optional table comment stored as a Unity Catalog table property.
         """
         if not table:
             log_and_raise_error(self._logger, "A destination table name is required.")
 
         full_name = self._qualified_uc_name(table, schema=schema, catalog=catalog)
+        spark = getattr(df, "sparkSession", None) or self._spark
         try:
-            df.write.mode(mode).saveAsTable(full_name)
+            writer = df.write.format("delta")
+            if merge_schema:
+                writer = writer.option("mergeSchema", "true")
+            writer.mode(mode).saveAsTable(full_name)
         except Exception as e:
             log_and_raise_error(self._logger, f"Error writing to Unity Catalog table '{full_name}': {e}")
         self._logger.info(f"Table '{full_name}' written to Unity Catalog (mode={mode}).")
+
+        if comment is not None:
+            self.set_uc_table_comment(full_name, comment, spark=spark)
+
+        if optimize:
+            self.optimize_uc_table(full_name, zorder_by=zorder_by, spark=spark)
