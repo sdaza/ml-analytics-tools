@@ -1,5 +1,18 @@
 # Changelog
 
+## [0.4.4](https://github.com/sdaza/ml-analytics-tools/compare/ml-analytics-tools-v0.4.3...ml-analytics-tools-v0.4.4) (2026-06-17)
+
+
+### Bug Fixes
+
+* **sf_connector:** add save_pipeline_to_uc for YAML-ordered SQL execution and Unity Catalog saving ([a2b91b1](https://github.com/sdaza/ml-analytics-tools/commit/a2b91b1dc316b9169299f0950cee5489e72ac36e))
+* **utils:** implement resolve_sql_query_paths to normalize SQL query paths ([a2b91b1](https://github.com/sdaza/ml-analytics-tools/commit/a2b91b1dc316b9169299f0950cee5489e72ac36e))
+
+
+### Documentation
+
+* update README and SF_CONNECTOR_USAGE with new save_pipeline_to_uc usage examples ([a2b91b1](https://github.com/sdaza/ml-analytics-tools/commit/a2b91b1dc316b9169299f0950cee5489e72ac36e))
+
 ## [0.4.3](https://github.com/sdaza/ml-analytics-tools/compare/ml-analytics-tools-v0.4.2...ml-analytics-tools-v0.4.3) (2026-06-16)
 
 
