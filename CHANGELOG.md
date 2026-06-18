@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.4.5](https://github.com/sdaza/ml-analytics-tools/compare/ml-analytics-tools-v0.4.4...ml-analytics-tools-v0.4.5) (2026-06-18)
+
+
+### Bug Fixes
+
+* **data_connector, sf_connector:** add methods to lowercase DataFrame columns and handle decimal types for pandas conversion ([09cf1a9](https://github.com/sdaza/ml-analytics-tools/commit/09cf1a94f4da7d343d9d4b8c1fad16a78dc8e6e9))
+
 ## [0.4.4](https://github.com/sdaza/ml-analytics-tools/compare/ml-analytics-tools-v0.4.3...ml-analytics-tools-v0.4.4) (2026-06-17)
 
 
