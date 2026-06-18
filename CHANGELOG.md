@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.4.6](https://github.com/sdaza/ml-analytics-tools/compare/ml-analytics-tools-v0.4.5...ml-analytics-tools-v0.4.6) (2026-06-18)
+
+
+### Bug Fixes
+
+* **model_manager, sf_connector, utils:** enhance model management and SQL handling ([52f5763](https://github.com/sdaza/ml-analytics-tools/commit/52f576373aadd21bfe2e5fad1dfe300544130106))
+
 ## [0.4.5](https://github.com/sdaza/ml-analytics-tools/compare/ml-analytics-tools-v0.4.4...ml-analytics-tools-v0.4.5) (2026-06-18)
 
 
