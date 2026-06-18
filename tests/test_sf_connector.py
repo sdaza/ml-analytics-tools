@@ -202,6 +202,23 @@ def test_resolve_query_loads_sql_file(monkeypatch, tmp_path):
     assert sf._resolve_query("q.sql", n=5) == "SELECT 5 AS n"
 
 
+def test_resolve_query_strips_sql_file_comments(monkeypatch, tmp_path):
+    _clear_snowflake_env(monkeypatch)
+    sql_file = tmp_path / "q.sql"
+    sql_file.write_text(
+        """
+-- Databricks/Spark Snowflake connector does not like leading comments
+SELECT '-- keep string literal' AS value, {n} AS n -- remove inline comment
+/* remove block comment */
+"""
+    )
+    monkeypatch.setattr("ml_analytics.sf_connector.find_project_root", lambda *a, **k: tmp_path, raising=False)
+    monkeypatch.setattr("ml_analytics.utils.find_project_root", lambda *a, **k: tmp_path)
+    sf = SFConnector(account="acct", user="u")
+
+    assert sf._resolve_query("q.sql", n=5) == "SELECT '-- keep string literal' AS value, 5 AS n"
+
+
 def test_resolve_query_missing_file_raises(monkeypatch, tmp_path):
     _clear_snowflake_env(monkeypatch)
     monkeypatch.setattr("ml_analytics.utils.find_project_root", lambda *a, **k: tmp_path)

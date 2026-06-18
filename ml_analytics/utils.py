@@ -406,13 +406,82 @@ def get_sql_files(relative_folder: str, pipeline: str | None = None) -> dict[str
         return {}
 
 
-def load_sql_query(query_path: str, **kwargs) -> str | None:
+def strip_sql_comments(sql_content: str) -> str:
+    """
+    Remove SQL comments while preserving quoted string literals.
+
+    This handles single-line ``--`` comments and block ``/* ... */`` comments.
+    It is intentionally conservative and keeps newlines from removed comments so
+    surrounding SQL tokens do not get accidentally joined together.
+    """
+    cleaned = []
+    in_single_line_comment = False
+    in_multi_line_comment = False
+    in_string = False
+    string_delimiter = None
+    i = 0
+
+    while i < len(sql_content):
+        char = sql_content[i]
+        next_chars = sql_content[i : i + 2]
+
+        if in_single_line_comment:
+            if char == "\n":
+                in_single_line_comment = False
+                cleaned.append(char)
+            i += 1
+            continue
+
+        if in_multi_line_comment:
+            if next_chars == "*/":
+                in_multi_line_comment = False
+                i += 2
+                continue
+            if char == "\n":
+                cleaned.append(char)
+            i += 1
+            continue
+
+        if not in_string and next_chars == "--":
+            in_single_line_comment = True
+            i += 2
+            continue
+
+        if not in_string and next_chars == "/*":
+            in_multi_line_comment = True
+            i += 2
+            continue
+
+        if char in ("'", '"'):
+            if not in_string:
+                in_string = True
+                string_delimiter = char
+            elif char == string_delimiter:
+                if i + 1 < len(sql_content) and sql_content[i + 1] == char:
+                    cleaned.append(char)
+                    cleaned.append(sql_content[i + 1])
+                    i += 2
+                    continue
+                in_string = False
+                string_delimiter = None
+
+        cleaned.append(char)
+        i += 1
+
+    return "\n".join(line.rstrip() for line in "".join(cleaned).splitlines()).strip()
+
+
+def load_sql_query(query_path: str, strip_comments: bool = False, **kwargs) -> str | None:
     """
     Load a SQL query from a file.
 
     Relative paths are resolved from the project root first, then the current
     working directory, then the active Databricks notebook directory when
     available.
+
+    When ``strip_comments`` is True, SQL comments are removed before template
+    substitution. This is useful for connectors that wrap queries internally and
+    can mis-handle leading ``--`` comments.
     """
     logger = get_logger("ml_analytics.utils.load_sql_query")
 
@@ -436,7 +505,10 @@ def load_sql_query(query_path: str, **kwargs) -> str | None:
             if not absolute_file_path.exists():
                 continue
             with open(absolute_file_path) as file:
-                return file.read().format(**kwargs)
+                sql_content = file.read()
+                if strip_comments:
+                    sql_content = strip_sql_comments(sql_content)
+                return sql_content.format(**kwargs)
 
         logger.error(f"SQL file '{query_path}' not found. Checked: {checked_paths}.")
         return None

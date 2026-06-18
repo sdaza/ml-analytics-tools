@@ -143,6 +143,11 @@ df = sf.sql("queries/dim_tutor.sql")                 # load + run a file
 df = sf.sql("queries/experiment.sql", days=14)       # with {days} templating
 ```
 
+When loading `.sql` files, `SFConnector` strips SQL comments before sending the
+query to Spark. This avoids Snowflake Spark connector errors from leading `--`
+comments and prevents commented `{placeholders}` from being interpreted during
+template substitution.
+
 ### Saving results to Unity Catalog
 
 Persist a result into a Databricks Unity Catalog table with Spark's native

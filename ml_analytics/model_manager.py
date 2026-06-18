@@ -50,6 +50,8 @@ class ModelManager:
         team: str | None = None,
         user: str | None = None,
         tracking_uri: str | None = None,
+        registry_uri: str | None = None,
+        use_databricks_uc: bool | None = None,
         workspace: str | None = None,
         create_registered_model: bool = False,
         start_initial_run: bool = False,
@@ -75,6 +77,14 @@ class ModelManager:
         tracking_uri : Optional[str]
             The MLflow tracking URI. If None, uses MLFLOW_TRACKING_URI env var,
             falling back to MLflow's configured default.
+        registry_uri : Optional[str]
+            The MLflow registry URI. If None, uses MLFLOW_REGISTRY_URI env var,
+            or ``databricks-uc`` when Databricks Unity Catalog is detected.
+        use_databricks_uc : Optional[bool]
+            If True, set the MLflow registry URI to ``databricks-uc``. If False,
+            do not auto-configure Unity Catalog. If None, Unity Catalog is used
+            only when the tracking URI is Databricks and ``model_name`` is a
+            three-level Unity Catalog name (``catalog.schema.model``).
         workspace : Optional[str]
             The MLflow workspace name. If None, uses MLFLOW_WORKSPACE env var.
             If neither is set, workspace is not configured (for servers without workspace support).
@@ -104,6 +114,18 @@ class ModelManager:
         self.tracking_uri = tracking_uri or os.environ.get("MLFLOW_TRACKING_URI") or mlflow.get_tracking_uri()
         mlflow.set_tracking_uri(self.tracking_uri)
         self._logger.debug(f"MLflow tracking URI set to: {self.tracking_uri}")
+
+        self.registry_uri = self._resolve_registry_uri(
+            registry_uri=registry_uri,
+            use_databricks_uc=use_databricks_uc,
+            tracking_uri=self.tracking_uri,
+            model_name=model_name,
+        )
+        if self.registry_uri:
+            mlflow.set_registry_uri(self.registry_uri)
+            self._logger.debug(f"MLflow registry URI set to: {self.registry_uri}")
+        else:
+            self._logger.debug("No registry URI configured, using MLflow default.")
 
         # Set MLflow workspace: explicit param > env var; skip if not set (server may not support workspaces)
         self.workspace = workspace or os.environ.get("MLFLOW_WORKSPACE")
@@ -147,6 +169,46 @@ class ModelManager:
             self.start_run(run_name)
         else:
             self.run_id = None
+
+    @staticmethod
+    def _is_databricks_tracking_uri(tracking_uri: str | None) -> bool:
+        if not tracking_uri:
+            return False
+        normalized = str(tracking_uri).strip().lower()
+        return (
+            normalized == "databricks"
+            or normalized.startswith("databricks://")
+            or (normalized.startswith("https://") and "databricks" in normalized)
+        )
+
+    @staticmethod
+    def _is_unity_catalog_model_name(model_name: str | None) -> bool:
+        if not model_name:
+            return False
+        parts = model_name.split(".")
+        if len(parts) != 3 or not all(parts):
+            return False
+        return parts[0].lower() != "hive_metastore"
+
+    @classmethod
+    def _resolve_registry_uri(
+        cls,
+        *,
+        registry_uri: str | None,
+        use_databricks_uc: bool | None,
+        tracking_uri: str | None,
+        model_name: str,
+    ) -> str | None:
+        configured_registry_uri = registry_uri or os.environ.get("MLFLOW_REGISTRY_URI")
+        if configured_registry_uri:
+            return configured_registry_uri
+        if use_databricks_uc is True:
+            return "databricks-uc"
+        if use_databricks_uc is False:
+            return None
+        if cls._is_databricks_tracking_uri(tracking_uri) and cls._is_unity_catalog_model_name(model_name):
+            return "databricks-uc"
+        return None
 
     def start_run(self, run_name: str | None = None) -> None:
         """

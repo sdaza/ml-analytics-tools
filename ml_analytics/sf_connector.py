@@ -243,7 +243,7 @@ class SFConnector:
     def _resolve_query(self, query: str, **kwargs) -> str:
         """Resolve a query string: if it looks like a SQL file path, load it; otherwise return as-is."""
         if query and query.strip().endswith(".sql"):
-            loaded = load_sql_query(query.strip(), **kwargs)
+            loaded = load_sql_query(query.strip(), strip_comments=True, **kwargs)
             if loaded is None:
                 log_and_raise_error(self._logger, f"Could not load SQL file: {query}")
             self._logger.info(f"Loaded SQL from file: {query}")

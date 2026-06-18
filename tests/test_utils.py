@@ -4,7 +4,7 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-from ml_analytics.utils import execute_sql_scripts, get_sql_files, load_sql_query
+from ml_analytics.utils import execute_sql_scripts, get_sql_files, load_sql_query, strip_sql_comments
 
 SQL_FOLDER_NAME = "queries"
 
@@ -155,6 +155,35 @@ class TestLoadSqlQuery:
         monkeypatch.setattr("ml_analytics.utils._databricks_notebook_dir", lambda: notebook_dir)
 
         assert load_sql_query("sql/experiment.sql") == "SELECT 1"
+
+    def test_strip_comments_before_template_substitution(self, monkeypatch, tmp_path):
+        sql_file = tmp_path / "sql" / "experiment.sql"
+        sql_file.parent.mkdir()
+        sql_file.write_text("-- comment with {missing_placeholder}\nSELECT {n} AS n")
+
+        monkeypatch.chdir(tmp_path)
+        monkeypatch.setattr("ml_analytics.utils.find_project_root", lambda *args, **kwargs: None)
+        monkeypatch.setattr("ml_analytics.utils._databricks_notebook_dir", lambda: None)
+
+        assert load_sql_query("sql/experiment.sql", strip_comments=True, n=7) == "SELECT 7 AS n"
+
+
+class TestStripSqlComments:
+    def test_strips_line_and_block_comments(self):
+        sql = dedent("""\
+            -- leading comment
+            SELECT 1 AS id, -- inline comment
+                   2 AS value
+            /* block comment */
+            FROM table
+        """)
+
+        assert strip_sql_comments(sql) == "SELECT 1 AS id,\n       2 AS value\n\nFROM table"
+
+    def test_preserves_comment_tokens_inside_strings(self):
+        sql = "SELECT '-- not a comment' AS value, '/* also not */' AS other -- trailing"
+
+        assert strip_sql_comments(sql) == "SELECT '-- not a comment' AS value, '/* also not */' AS other"
 
 
 # ---------------------------------------------------------------------------

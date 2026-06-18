@@ -269,6 +269,21 @@ manager.log_metric("auc", 0.91)
 manager.end_run()
 ```
 
+For Databricks Unity Catalog model registry, use a three-level model name. When
+the tracking URI is Databricks, `ModelManager` automatically sets the MLflow
+registry URI to `databricks-uc` for names like `catalog.schema.model`. The
+legacy `hive_metastore` catalog is not treated as a Unity Catalog model
+registry target; use `registry_uri="databricks"` and a one-level model name for
+the workspace model registry.
+
+```python
+manager = ModelManager(
+    model_name="dev.ml_models.churn_model",
+    tracking_uri="databricks",
+    user="user@example.com",
+)
+```
+
 ### Send A Slack Message
 
 ```python
