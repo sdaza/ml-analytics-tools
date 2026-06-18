@@ -60,6 +60,11 @@ def _snowflake_account_url(account: str) -> str:
     return f"{account_url}.snowflakecomputing.com"
 
 
+def _quote_spark_identifier(column_name: str) -> str:
+    """Quote a Spark column identifier so dots/backticks are treated literally."""
+    return f"`{str(column_name).replace('`', '``')}`"
+
+
 class SFConnector:
     """
     Connect to Snowflake through Spark and read/write Spark or pandas DataFrames.
@@ -245,6 +250,48 @@ class SFConnector:
             return loaded
         return query
 
+    @staticmethod
+    def _lowercase_spark_columns(df):
+        columns = getattr(df, "columns", None)
+        if not isinstance(columns, list):
+            return df
+
+        lowered_columns = [str(column).lower() for column in columns]
+        if lowered_columns == columns:
+            return df
+        return df.toDF(*lowered_columns)
+
+    @staticmethod
+    def _cast_decimal_columns_for_pandas_conversion(df):
+        try:
+            from pyspark.sql import functions as F
+            from pyspark.sql.types import DecimalType
+        except ImportError:
+            return df
+
+        fields = getattr(getattr(df, "schema", None), "fields", None)
+        if not isinstance(fields, list | tuple):
+            return df
+
+        expressions = []
+        has_decimal_columns = False
+        for field in fields:
+            column_name = field.name
+            column = F.col(_quote_spark_identifier(column_name))
+            if isinstance(field.dataType, DecimalType):
+                cast_type = "long" if getattr(field.dataType, "scale", 0) == 0 else "double"
+                column = column.cast(cast_type)
+                has_decimal_columns = True
+            expressions.append(column.alias(column_name))
+
+        if not has_decimal_columns:
+            return df
+        return df.select(*expressions)
+
+    def _normalize_result_dataframe(self, df):
+        df = self._lowercase_spark_columns(df)
+        return self._cast_decimal_columns_for_pandas_conversion(df)
+
     def sql(
         self,
         query: str,
@@ -306,6 +353,8 @@ class SFConnector:
             df = spark.read.format(self.source_format).options(**self.spark_options()).option("query", query).load()
         except Exception as e:
             log_and_raise_error(self._logger, f"Error reading from Snowflake: {e}")
+
+        df = self._normalize_result_dataframe(df)
 
         if save_table:
             self.save_to_uc(

@@ -798,6 +798,17 @@ class DataConnector:
         columns = [col[0] for col in description]
         return pd.DataFrame(rows, columns=columns or None)
 
+    @staticmethod
+    def _lowercase_dataframe_columns(df: pd.DataFrame | pl.DataFrame) -> pd.DataFrame | pl.DataFrame:
+        if isinstance(df, pd.DataFrame):
+            df = df.copy()
+            df.columns = [str(column).lower() for column in df.columns]
+            return df
+        if isinstance(df, pl.DataFrame):
+            renamed_columns = {column: column.lower() for column in df.columns if column != column.lower()}
+            return df.rename(renamed_columns) if renamed_columns else df
+        return df
+
     def sql(self, query: str = None, format: str = "pandas", **kwargs) -> pl.DataFrame | pd.DataFrame:
         """
         Execute a SQL query against the configured database and return the result.
@@ -820,7 +831,7 @@ class DataConnector:
 
             if format == "pandas":
                 self.execute_sql(query)
-                tmp = self._fetch_pandas_dataframe()
+                tmp = self._lowercase_dataframe_columns(self._fetch_pandas_dataframe())
                 self._logger.info("Data fetched successfully")
                 return tmp
             elif format == "polars":
@@ -829,6 +840,7 @@ class DataConnector:
                     tmp = pl.from_pandas(self._fetch_pandas_dataframe())
                 else:
                     tmp = pl.read_database(query, connection=self.cursor)
+                tmp = self._lowercase_dataframe_columns(tmp)
                 self._logger.info("Data fetched successfully")
                 return tmp
         except Exception as e:

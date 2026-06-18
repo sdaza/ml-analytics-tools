@@ -1,4 +1,6 @@
 import builtins
+import sys
+from types import ModuleType, SimpleNamespace
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -352,6 +354,20 @@ def test_sql_builds_reader_chain(monkeypatch):
     spark.read.format.return_value.options.return_value.option.assert_called_once_with("query", "select 1")
 
 
+def test_sql_lowercases_spark_columns(monkeypatch):
+    _clear_snowflake_env(monkeypatch)
+    spark, df = _mock_spark()
+    df.columns = ["USER_ID", "NPC"]
+    normalized_df = MagicMock()
+    df.toDF.return_value = normalized_df
+    sf = SFConnector(account="acct", user="u", password="p", spark=spark)
+
+    result = sf.sql("select 1")
+
+    assert result is normalized_df
+    df.toDF.assert_called_once_with("user_id", "npc")
+
+
 def test_sql_return_pandas(monkeypatch):
     _clear_snowflake_env(monkeypatch)
     spark, df = _mock_spark()
@@ -360,6 +376,74 @@ def test_sql_return_pandas(monkeypatch):
     sf.sql("select 1", return_pandas=True)
 
     df.toPandas.assert_called_once()
+
+
+def test_sql_return_pandas_uses_normalized_dataframe(monkeypatch):
+    _clear_snowflake_env(monkeypatch)
+    spark, df = _mock_spark()
+    df.columns = ["USER_ID"]
+    normalized_df = MagicMock()
+    df.toDF.return_value = normalized_df
+    sf = SFConnector(account="acct", user="u", password="p", spark=spark)
+
+    sf.sql("select 1", return_pandas=True)
+
+    normalized_df.toPandas.assert_called_once()
+    df.toPandas.assert_not_called()
+
+
+def test_decimal_columns_are_cast_to_primitives(monkeypatch):
+    class FakeDecimalType:
+        def __init__(self, precision, scale):
+            self.precision = precision
+            self.scale = scale
+
+    class FakeColumn:
+        def __init__(self, name):
+            self.name = name
+            self.cast_type = None
+            self.alias_name = None
+
+        def cast(self, cast_type):
+            self.cast_type = cast_type
+            return self
+
+        def alias(self, alias_name):
+            self.alias_name = alias_name
+            return self
+
+    functions_module = ModuleType("pyspark.sql.functions")
+    functions_module.col = lambda name: FakeColumn(name)
+    types_module = ModuleType("pyspark.sql.types")
+    types_module.DecimalType = FakeDecimalType
+    sql_module = ModuleType("pyspark.sql")
+    sql_module.functions = functions_module
+    sql_module.types = types_module
+    pyspark_module = ModuleType("pyspark")
+    pyspark_module.sql = sql_module
+    monkeypatch.setitem(sys.modules, "pyspark", pyspark_module)
+    monkeypatch.setitem(sys.modules, "pyspark.sql", sql_module)
+    monkeypatch.setitem(sys.modules, "pyspark.sql.functions", functions_module)
+    monkeypatch.setitem(sys.modules, "pyspark.sql.types", types_module)
+
+    df = MagicMock()
+    df.schema.fields = [
+        SimpleNamespace(name="user_id", dataType=FakeDecimalType(38, 0)),
+        SimpleNamespace(name="score", dataType=FakeDecimalType(10, 4)),
+        SimpleNamespace(name="label", dataType=object()),
+    ]
+    normalized_df = MagicMock()
+    df.select.return_value = normalized_df
+
+    result = SFConnector._cast_decimal_columns_for_pandas_conversion(df)
+
+    assert result is normalized_df
+    selected_columns = df.select.call_args.args
+    assert [(column.name, column.cast_type, column.alias_name) for column in selected_columns] == [
+        ("`user_id`", "long", "user_id"),
+        ("`score`", "double", "score"),
+        ("`label`", None, "label"),
+    ]
 
 
 def test_save_pipeline_to_uc_uses_yaml_order_and_file_stem_tables(monkeypatch, tmp_path):

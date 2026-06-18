@@ -208,6 +208,27 @@ def test_s3_and_db_operations(mock_s3, mock_db, mock_credentials):
     mock_s3.delete_object.assert_called_with(Bucket=s3.bucket, Key="ml-bi-projects/testing/test.parquet")
 
 
+def test_data_connector_sql_lowercases_pandas_columns(mock_db, mock_credentials):
+    dc = DataConnector()
+    mock_db.fetch_dataframe.return_value = pd.DataFrame({"USER_ID": [1, 2], "NPC": [3, 4]})
+
+    df = dc.sql("SELECT 1")
+
+    assert list(df.columns) == ["user_id", "npc"]
+
+
+def test_data_connector_sql_lowercases_polars_columns(mock_db, mock_credentials):
+    dc = DataConnector()
+
+    with patch(
+        "ml_analytics.data_connector.pl.read_database",
+        return_value=pl.DataFrame({"USER_ID": [1, 2], "NPC": [3, 4]}),
+    ):
+        df = dc.sql("SELECT 1", format="polars")
+
+    assert df.columns == ["user_id", "npc"]
+
+
 def test_s3_save_dataframe_with_pandas(mock_s3):
     s3 = S3Connector(bucket="test-bucket")
     df = pd.DataFrame({"col1": [1, 2], "col2": [3, 4]})
