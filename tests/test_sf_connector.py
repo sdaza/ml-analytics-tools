@@ -202,21 +202,40 @@ def test_resolve_query_loads_sql_file(monkeypatch, tmp_path):
     assert sf._resolve_query("q.sql", n=5) == "SELECT 5 AS n"
 
 
-def test_resolve_query_strips_sql_file_comments(monkeypatch, tmp_path):
+def test_resolve_query_preserves_sql_file_comments(monkeypatch, tmp_path):
     _clear_snowflake_env(monkeypatch)
     sql_file = tmp_path / "q.sql"
     sql_file.write_text(
         """
--- Databricks/Spark Snowflake connector does not like leading comments
-SELECT '-- keep string literal' AS value, {n} AS n -- remove inline comment
-/* remove block comment */
+-- leading comment
+SELECT '-- keep string literal' AS value, {n} AS n -- inline comment
+/* block comment */
 """
     )
     monkeypatch.setattr("ml_analytics.sf_connector.find_project_root", lambda *a, **k: tmp_path, raising=False)
     monkeypatch.setattr("ml_analytics.utils.find_project_root", lambda *a, **k: tmp_path)
     sf = SFConnector(account="acct", user="u")
 
-    assert sf._resolve_query("q.sql", n=5) == "SELECT '-- keep string literal' AS value, 5 AS n"
+    resolved = sf._resolve_query("q.sql", n=5)
+    # Comments are preserved, not stripped; template substitution still applies.
+    assert "-- leading comment" in resolved
+    assert "-- inline comment" in resolved
+    assert "/* block comment */" in resolved
+    assert "SELECT '-- keep string literal' AS value, 5 AS n" in resolved
+
+
+def test_wrap_query_for_connector_isolates_comments():
+    sf = SFConnector(account="acct", user="u")
+    wrapped = sf._wrap_query_for_connector("-- lead\nSELECT 1 AS n -- trail")
+    # Comments stay; they're isolated on their own lines so the connector's own
+    # wrapping cannot be commented out.
+    assert wrapped == "SELECT * FROM (\n-- lead\nSELECT 1 AS n -- trail\n) AS ml_analytics_query"
+
+
+def test_wrap_query_for_connector_handles_empty():
+    sf = SFConnector(account="acct", user="u")
+    assert sf._wrap_query_for_connector("") == ""
+    assert sf._wrap_query_for_connector("   ") == "   "
 
 
 def test_resolve_query_missing_file_raises(monkeypatch, tmp_path):
@@ -368,7 +387,9 @@ def test_sql_builds_reader_chain(monkeypatch):
 
     assert result is df
     spark.read.format.assert_called_once_with("net.snowflake.spark.snowflake")
-    spark.read.format.return_value.options.return_value.option.assert_called_once_with("query", "select 1")
+    spark.read.format.return_value.options.return_value.option.assert_called_once_with(
+        "query", "SELECT * FROM (\nselect 1\n) AS ml_analytics_query"
+    )
 
 
 def test_sql_lowercases_spark_columns(monkeypatch):
@@ -492,8 +513,8 @@ steps:
     assert result is df
     query_calls = spark.read.format.return_value.options.return_value.option.call_args_list
     assert [call.args for call in query_calls] == [
-        ("query", "SELECT 1 AS feature;"),
-        ("query", "SELECT '2026-06-17' AS run_date;"),
+        ("query", "SELECT * FROM (\nSELECT 1 AS feature\n) AS ml_analytics_query"),
+        ("query", "SELECT * FROM (\nSELECT '2026-06-17' AS run_date\n) AS ml_analytics_query"),
     ]
     save_calls = df.write.format.return_value.option.return_value.mode.return_value.saveAsTable.call_args_list
     assert [call.args[0] for call in save_calls] == [

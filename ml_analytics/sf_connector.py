@@ -243,12 +243,35 @@ class SFConnector:
     def _resolve_query(self, query: str, **kwargs) -> str:
         """Resolve a query string: if it looks like a SQL file path, load it; otherwise return as-is."""
         if query and query.strip().endswith(".sql"):
-            loaded = load_sql_query(query.strip(), strip_comments=True, **kwargs)
+            loaded = load_sql_query(query.strip(), **kwargs)
             if loaded is None:
                 log_and_raise_error(self._logger, f"Could not load SQL file: {query}")
             self._logger.info(f"Loaded SQL from file: {query}")
             return loaded
         return query
+
+    @staticmethod
+    def _wrap_query_for_connector(query: str) -> str:
+        """
+        Make a query safe for the Snowflake Spark connector without removing comments.
+
+        The connector embeds the supplied query inside its own wrappers (for schema
+        discovery and pushdown, e.g. ``SELECT * FROM (<query>) WHERE 1 = 0``). A
+        leading or trailing single-line ``--`` comment in ``<query>`` then comments
+        out the connector's surrounding tokens and raises a parse error.
+
+        Rather than stripping comments (which changes the query), wrap it in an
+        explicit subquery with surrounding newlines. This isolates any comments on
+        their own lines so they are preserved and *not* executed, while the query
+        runs exactly as written.
+        """
+        if not query or not query.strip():
+            return query
+        inner = query.strip()
+        # A trailing statement terminator is illegal inside a subquery; drop it.
+        if inner.endswith(";"):
+            inner = inner[:-1].rstrip()
+        return f"SELECT * FROM (\n{inner}\n) AS ml_analytics_query"
 
     @staticmethod
     def _lowercase_spark_columns(df):
@@ -347,7 +370,7 @@ class SFConnector:
         **kwargs
             Template variables substituted into the SQL file using ``str.format()``.
         """
-        query = self._resolve_query(query, **kwargs)
+        query = self._wrap_query_for_connector(self._resolve_query(query, **kwargs))
         spark = self._get_spark()
         try:
             df = spark.read.format(self.source_format).options(**self.spark_options()).option("query", query).load()
