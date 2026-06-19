@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.5.0](https://github.com/sdaza/ml-analytics-tools/compare/ml-analytics-tools-v0.4.7...ml-analytics-tools-v0.5.0) (2026-06-19)
+
+
+### Features
+
+* **sf_connector:** add options to drop existing tables and overwrite schema in save_to_uc ([e564bae](https://github.com/sdaza/ml-analytics-tools/commit/e564bae9ed2a7539a741711ed3387aa2ca32bf80))
+
 ## [0.4.7](https://github.com/sdaza/ml-analytics-tools/compare/ml-analytics-tools-v0.4.6...ml-analytics-tools-v0.4.7) (2026-06-19)
 
 
