@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.4.7](https://github.com/sdaza/ml-analytics-tools/compare/ml-analytics-tools-v0.4.6...ml-analytics-tools-v0.4.7) (2026-06-19)
+
+
+### Bug Fixes
+
+* **sf_connector:** add query wrapping to preserve comments for Snowflake connector ([489400f](https://github.com/sdaza/ml-analytics-tools/commit/489400ff1315e4bac71ba3685c39bd39b1f45d44))
+
 ## [0.4.6](https://github.com/sdaza/ml-analytics-tools/compare/ml-analytics-tools-v0.4.5...ml-analytics-tools-v0.4.6) (2026-06-18)
 
 
