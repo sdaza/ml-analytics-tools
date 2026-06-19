@@ -284,7 +284,7 @@ def test_save_to_uc_uses_saveastable(monkeypatch):
         write = _Writer()
         sparkSession = spark
 
-    sf.save_to_uc(_DF(), table="tbl", schema="sch", catalog="cat", mode="append")
+    sf.save_to_uc(_DF(), table="tbl", schema="sch", catalog="cat", mode="append", drop_existing=False)
     assert calls == {
         "format": "delta",
         "option": ("mergeSchema", "true"),
@@ -309,6 +309,7 @@ def test_save_to_uc_can_zorder_comment_or_skip_optimize(monkeypatch):
         catalog="cat",
         zorder_by=["customer_id", "event_date"],
         comment="Tutor's metrics",
+        drop_existing=False,
     )
     assert [call.args[0] for call in spark.sql.call_args_list] == [
         "ALTER TABLE cat.sch.tbl SET TBLPROPERTIES ('comment' = 'Tutor''s metrics')",
@@ -316,8 +317,60 @@ def test_save_to_uc_can_zorder_comment_or_skip_optimize(monkeypatch):
     ]
 
     spark.reset_mock()
-    sf.save_to_uc(df, table="tbl", schema="sch", catalog="cat", optimize=False)
+    sf.save_to_uc(df, table="tbl", schema="sch", catalog="cat", optimize=False, drop_existing=False)
     spark.sql.assert_not_called()
+
+
+def test_save_to_uc_drops_and_overwrites_schema_by_default(monkeypatch):
+    _clear_snowflake_env(monkeypatch)
+    spark = MagicMock()
+    sf = SFConnector(account="acct", user="u", spark=spark)
+
+    calls = {}
+
+    class _Writer:
+        def format(self, fmt):
+            calls["format"] = fmt
+            return self
+
+        def option(self, key, value):
+            calls["option"] = (key, value)
+            return self
+
+        def mode(self, m):
+            calls["mode"] = m
+            return self
+
+        def saveAsTable(self, name):
+            calls["name"] = name
+
+    class _DF:
+        write = _Writer()
+        sparkSession = spark
+
+    sf.save_to_uc(_DF(), table="tbl", schema="sch", catalog="cat", optimize=False)
+
+    # Defaults: drop the table first, then overwrite the schema (not merge).
+    assert calls == {
+        "format": "delta",
+        "option": ("overwriteSchema", "true"),
+        "mode": "overwrite",
+        "name": "cat.sch.tbl",
+    }
+    spark.sql.assert_called_once_with("DROP TABLE IF EXISTS cat.sch.tbl")
+
+
+def test_save_to_uc_can_skip_drop(monkeypatch):
+    _clear_snowflake_env(monkeypatch)
+    spark = MagicMock()
+    sf = SFConnector(account="acct", user="u", spark=spark)
+
+    df = MagicMock()
+    df.sparkSession = spark
+
+    sf.save_to_uc(df, table="tbl", schema="sch", catalog="cat", optimize=False, drop_existing=False)
+
+    assert not any("DROP TABLE" in call.args[0] for call in spark.sql.call_args_list)
 
 
 def test_save_to_uc_requires_table(monkeypatch):
@@ -510,7 +563,8 @@ steps:
         run_date="2026-06-17",
     )
 
-    assert result is df
+    # Returned DataFrame reads from the saved Delta table, not the Snowflake source.
+    assert result is spark.table.return_value
     query_calls = spark.read.format.return_value.options.return_value.option.call_args_list
     assert [call.args for call in query_calls] == [
         ("query", "SELECT * FROM (\nSELECT 1 AS feature\n) AS ml_analytics_query"),
@@ -521,8 +575,11 @@ steps:
         "prod.analytics.features",
         "prod.analytics.base",
     ]
+    # drop_existing defaults to True, so each table is dropped before its write.
     assert [call.args[0] for call in spark.sql.call_args_list] == [
+        "DROP TABLE IF EXISTS prod.analytics.features",
         "OPTIMIZE prod.analytics.features",
+        "DROP TABLE IF EXISTS prod.analytics.base",
         "OPTIMIZE prod.analytics.base",
     ]
 
@@ -546,10 +603,11 @@ def test_save_pipeline_to_uc_allows_table_and_mode_overrides(monkeypatch, tmp_pa
         table_prefix="stg_",
         modes={"final": "append"},
         zorder_by={"final": "customer_id"},
+        drop_existing=False,
         return_all=True,
     )
 
-    assert result == {"base": df, "final": df}
+    assert result == {"base": spark.table.return_value, "final": spark.table.return_value}
     mode_calls = df.write.format.return_value.option.return_value.mode.call_args_list
     assert [call.args[0] for call in mode_calls] == ["overwrite", "append"]
     save_calls = df.write.format.return_value.option.return_value.mode.return_value.saveAsTable.call_args_list

@@ -328,6 +328,8 @@ class SFConnector:
         zorder_by=None,
         merge_schema: bool = True,
         comment: str = None,
+        drop_existing: bool = True,
+        overwrite_schema: bool = True,
         **kwargs,
     ):
         """
@@ -367,8 +369,22 @@ class SFConnector:
             If saving to Unity Catalog, set Delta ``mergeSchema=true``. Defaults to True.
         comment : str, optional
             Optional table comment stored as a Unity Catalog table property.
+        drop_existing : bool, optional
+            If saving, drop the destination table before writing so it is fully
+            recreated from the result. Defaults to True. Set False to preserve the
+            table (required for ``mode='append'``).
+        overwrite_schema : bool, optional
+            If saving with ``mode='overwrite'``, replace the table schema (drop removed
+            columns) via Delta ``overwriteSchema=true``. Defaults to True.
         **kwargs
             Template variables substituted into the SQL file using ``str.format()``.
+
+        Returns
+        -------
+        DataFrame
+            The query result. When ``save_table`` is True, the returned DataFrame
+            reads from the saved Unity Catalog Delta table (fast), not the Snowflake
+            source — so downstream actions don't re-run the Snowflake query.
         """
         query = self._wrap_query_for_connector(self._resolve_query(query, **kwargs))
         spark = self._get_spark()
@@ -380,7 +396,9 @@ class SFConnector:
         df = self._normalize_result_dataframe(df)
 
         if save_table:
-            self.save_to_uc(
+            # Replace the Snowflake-backed DataFrame with one reading from the saved
+            # Delta table, so downstream use scans Unity Catalog instead of re-querying.
+            df = self.save_to_uc(
                 df,
                 table=table,
                 schema=schema,
@@ -390,6 +408,8 @@ class SFConnector:
                 zorder_by=zorder_by,
                 merge_schema=merge_schema,
                 comment=comment,
+                drop_existing=drop_existing,
+                overwrite_schema=overwrite_schema,
             )
 
         if return_pandas:
@@ -413,6 +433,8 @@ class SFConnector:
         merge_schema: bool = True,
         comment: str = None,
         comments: dict[str, str] = None,
+        drop_existing: bool = True,
+        overwrite_schema: bool = True,
         return_all: bool = False,
         **kwargs,
     ):
@@ -452,6 +474,13 @@ class SFConnector:
             Optional table comment applied to every saved table.
         comments
             Optional mapping of step name to table comment.
+        drop_existing
+            If True, drop each destination table before writing so it is fully
+            recreated from its query result. Defaults to True. Set False to preserve
+            tables (required for append modes).
+        overwrite_schema
+            If True, on overwrite replace each table's schema (drop removed columns)
+            via Delta ``overwriteSchema=true``. Defaults to True.
         return_all
             If True, return a dict of step name to Spark DataFrame. Otherwise
             return the last step's Spark DataFrame.
@@ -488,6 +517,8 @@ class SFConnector:
                 zorder_by=step_zorder_by,
                 merge_schema=merge_schema,
                 comment=step_comment,
+                drop_existing=drop_existing,
+                overwrite_schema=overwrite_schema,
                 **kwargs,
             )
             results[name] = last_df
@@ -584,6 +615,8 @@ class SFConnector:
         zorder_by=None,
         merge_schema: bool = True,
         comment: str = None,
+        drop_existing: bool = True,
+        overwrite_schema: bool = True,
     ):
         """
         Write a Spark DataFrame to a Databricks Unity Catalog table.
@@ -610,18 +643,52 @@ class SFConnector:
         zorder_by : str or list[str], optional
             Optional columns for Delta ``ZORDER BY`` during optimize.
         merge_schema : bool, optional
-            If True, writes as Delta with ``mergeSchema=true``. Defaults to True.
+            If True, writes as Delta with ``mergeSchema=true`` (used for appends and
+            whenever the schema is not being overwritten). Defaults to True. Ignored on
+            an overwrite when ``overwrite_schema`` is True (the two are mutually
+            exclusive in Delta).
         comment : str, optional
             Optional table comment stored as a Unity Catalog table property.
+        drop_existing : bool, optional
+            If True, ``DROP TABLE IF EXISTS`` the destination before writing so the
+            table is fully recreated from this DataFrame (removed columns disappear,
+            and table properties / grants / history are reset). Defaults to True.
+            Set to False to preserve the existing table — required for ``mode='append'``,
+            which would otherwise drop the table on every call.
+        overwrite_schema : bool, optional
+            If True and ``mode='overwrite'``, writes with Delta ``overwriteSchema=true``
+            so the table schema is replaced (columns absent from this DataFrame are
+            dropped) rather than merged. Defaults to True. Has no effect on non-overwrite
+            modes.
+
+        Returns
+        -------
+        pyspark.sql.DataFrame
+            A DataFrame reading back from the saved Unity Catalog Delta table
+            (``spark.table(full_name)``), not the source DataFrame. Downstream actions
+            then scan the fast Delta table instead of re-running the original read.
         """
         if not table:
             log_and_raise_error(self._logger, "A destination table name is required.")
 
         full_name = self._qualified_uc_name(table, schema=schema, catalog=catalog)
         spark = getattr(df, "sparkSession", None) or self._spark
+
+        if drop_existing:
+            try:
+                spark.sql(f"DROP TABLE IF EXISTS {full_name}")
+            except Exception as e:
+                log_and_raise_error(self._logger, f"Error dropping Unity Catalog table '{full_name}': {e}")
+            self._logger.info(f"Dropped existing Unity Catalog table '{full_name}' before write.")
+
         try:
             writer = df.write.format("delta")
-            if merge_schema:
+            # overwriteSchema and mergeSchema are mutually exclusive in Delta. On an
+            # overwrite, replacing the schema (so removed columns are dropped) takes
+            # precedence; mergeSchema is used otherwise (e.g. evolving on append).
+            if mode == "overwrite" and overwrite_schema:
+                writer = writer.option("overwriteSchema", "true")
+            elif merge_schema:
                 writer = writer.option("mergeSchema", "true")
             writer.mode(mode).saveAsTable(full_name)
         except Exception as e:
@@ -633,3 +700,7 @@ class SFConnector:
 
         if optimize:
             self.optimize_uc_table(full_name, zorder_by=zorder_by, spark=spark)
+
+        # Return a DataFrame backed by the just-written Delta table so callers read
+        # from fast Unity Catalog storage rather than re-executing the Snowflake read.
+        return spark.table(full_name)
