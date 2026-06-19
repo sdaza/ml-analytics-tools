@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.5.1](https://github.com/sdaza/ml-analytics-tools/compare/ml-analytics-tools-v0.5.0...ml-analytics-tools-v0.5.1) (2026-06-19)
+
+
+### Bug Fixes
+
+* **sf_connector:** enhance _resolve_query to format inline SQL queries with kwargs ([61d7313](https://github.com/sdaza/ml-analytics-tools/commit/61d7313cc614dffe74bd0710d0ef75fe6f41014f))
+
 ## [0.5.0](https://github.com/sdaza/ml-analytics-tools/compare/ml-analytics-tools-v0.4.7...ml-analytics-tools-v0.5.0) (2026-06-19)
 
 
