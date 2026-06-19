@@ -238,6 +238,28 @@ def test_wrap_query_for_connector_handles_empty():
     assert sf._wrap_query_for_connector("   ") == "   "
 
 
+def test_resolve_query_formats_inline_query_with_kwargs(monkeypatch):
+    _clear_snowflake_env(monkeypatch)
+    sf = SFConnector(account="acct", user="u")
+    resolved = sf._resolve_query("SELECT * FROM t WHERE d = '{date}' AND id IN ({ids})", date="2025-01-01", ids="1, 2")
+    assert resolved == "SELECT * FROM t WHERE d = '2025-01-01' AND id IN (1, 2)"
+
+
+def test_resolve_query_inline_without_kwargs_left_untouched(monkeypatch):
+    _clear_snowflake_env(monkeypatch)
+    sf = SFConnector(account="acct", user="u")
+    # No kwargs: literal braces (e.g. JSON / OBJECT_CONSTRUCT) must not be touched.
+    query = "SELECT OBJECT_CONSTRUCT('a', 1) WHERE x = '{not_a_placeholder}'"
+    assert sf._resolve_query(query) == query
+
+
+def test_resolve_query_inline_bad_template_raises(monkeypatch):
+    _clear_snowflake_env(monkeypatch)
+    sf = SFConnector(account="acct", user="u")
+    with pytest.raises(ValueError, match="formatting inline SQL"):
+        sf._resolve_query("SELECT '{missing}'", date="2025-01-01")
+
+
 def test_resolve_query_missing_file_raises(monkeypatch, tmp_path):
     _clear_snowflake_env(monkeypatch)
     monkeypatch.setattr("ml_analytics.utils.find_project_root", lambda *a, **k: tmp_path)

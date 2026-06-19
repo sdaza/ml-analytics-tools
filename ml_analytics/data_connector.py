@@ -707,13 +707,31 @@ class DataConnector:
                 self._start_idle_timer()
 
     def _resolve_query(self, query: str, **kwargs) -> str:
-        """Resolve a query string: if it looks like a SQL file path, load it; otherwise return as-is."""
+        """
+        Resolve a query string.
+
+        If it looks like a SQL file path, load it (applying ``**kwargs`` as
+        ``str.format`` template variables). Otherwise it's an inline query: it is
+        returned as-is, except that when ``**kwargs`` are provided they are applied
+        via ``str.format`` too, so callers don't have to ``query.format(...)``
+        themselves. With no kwargs the string is untouched, so inline SQL containing
+        literal ``{`` / ``}`` (JSON, OBJECT_CONSTRUCT, ...) is left alone.
+        """
         if query and query.strip().endswith(".sql"):
             loaded = load_sql_query(query.strip(), **kwargs)
             if loaded is None:
                 log_and_raise_error(self._logger, f"Could not load SQL file: {query}")
             self._logger.info(f"Loaded SQL from file: {query}")
             return loaded
+        if query and kwargs:
+            try:
+                return query.format(**kwargs)
+            except (KeyError, IndexError, ValueError) as e:
+                log_and_raise_error(
+                    self._logger,
+                    f"Error formatting inline SQL query with {sorted(kwargs)}: {e}. "
+                    f"Escape literal braces as '{{{{' / '}}}}' if the SQL is not a template.",
+                )
         return query
 
     def execute_sql(
