@@ -1,6 +1,6 @@
 [project]
 name = "ml-analytics-tools"
-version = "0.4.7"
+version = "0.5.0"
 description = "Tools for ML projects and data management"
 readme = "README.md"
 requires-python = ">=3.11"
