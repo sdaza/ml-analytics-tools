@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.5.3](https://github.com/sdaza/ml-analytics-tools/compare/ml-analytics-tools-v0.5.2...ml-analytics-tools-v0.5.3) (2026-06-23)
+
+
+### Bug Fixes
+
+* enhance SQL query handling to support comment-aware placeholder substitution ([d7d2c68](https://github.com/sdaza/ml-analytics-tools/commit/d7d2c68cb08538d4439b41a04cbeb62cdf63075d))
+
 ## [0.5.2](https://github.com/sdaza/ml-analytics-tools/compare/ml-analytics-tools-v0.5.1...ml-analytics-tools-v0.5.2) (2026-06-23)
 
 
