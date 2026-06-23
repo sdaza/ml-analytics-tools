@@ -23,6 +23,7 @@ from .utils import (
     get_logger,
     load_sql_query,
     log_and_raise_error,
+    sql_has_comments,
 )
 
 SNOWFLAKE_SPARK_SOURCE_NAME = "net.snowflake.spark.snowflake"
@@ -245,6 +246,11 @@ class DataConnector:
         By default, this connector uses Redshift to preserve existing behavior.
         Pass ``engine="snowflake"`` or set ``ML_ANALYTICS_DB_ENGINE=snowflake``
         to use Snowflake connection settings from ``SNOWFLAKE_*`` environment variables.
+
+        Both ``engine`` and ``user`` can be omitted when running on Databricks:
+        ``engine`` falls back to an ``ML_ANALYTICS_DB_ENGINE`` secret (after env
+        vars), and the Snowflake ``user`` falls back to the ``SNOWFLAKE_USER`` /
+        ``snowflake_user`` secret and finally to the current notebook user's email.
         """
         self._logger = get_logger("Data Connector")
         self.engine = self._resolve_engine(engine)
@@ -297,9 +303,13 @@ class DataConnector:
     @staticmethod
     def _resolve_engine(engine: str = None) -> str:
         selected = (
-            engine
-            or os.getenv("ML_ANALYTICS_DB_ENGINE")
-            or os.getenv("ML_ANALYTICS_DATABASE_ENGINE")
+            _clean_env_value(engine)
+            or _clean_env_value(os.getenv("ML_ANALYTICS_DB_ENGINE"))
+            or _clean_env_value(os.getenv("ML_ANALYTICS_DATABASE_ENGINE"))
+            # On Databricks, allow a personal-scope secret so callers can drop the
+            # ``engine`` arg entirely (set an ``ML_ANALYTICS_DB_ENGINE`` secret).
+            or _get_databricks_secret("ML_ANALYTICS_DB_ENGINE")
+            or _get_databricks_secret("ML_ANALYTICS_DATABASE_ENGINE")
             or "redshift"
         )
         normalized = selected.strip().lower().replace("-", "_")
@@ -374,13 +384,19 @@ class DataConnector:
             secret_scope=secret_scope,
         )
 
+        resolved_user = _get_snowflake_config_value(
+            "SNOWFLAKE_USER",
+            explicit=user,
+            secret_scope=secret_scope,
+            aliases=("snowflake_user",),
+        )
+        if resolved_user is None:
+            # On Databricks, default to the current notebook user's email so the
+            # connector works with no ``user`` arg, env var, or secret.
+            resolved_user = _databricks_current_user()
+
         params = {
-            "user": _get_snowflake_config_value(
-                "SNOWFLAKE_USER",
-                explicit=user,
-                secret_scope=secret_scope,
-                aliases=("snowflake_user",),
-            ),
+            "user": resolved_user,
             "password": _get_snowflake_config_value(
                 "SNOWFLAKE_PASSWORD", explicit=password, secret_scope=secret_scope
             ),
@@ -716,6 +732,11 @@ class DataConnector:
         via ``str.format`` too, so callers don't have to ``query.format(...)``
         themselves. With no kwargs the string is untouched, so inline SQL containing
         literal ``{`` / ``}`` (JSON, OBJECT_CONSTRUCT, ...) is left alone.
+
+        Inline queries that contain SQL comments (``--`` or ``/* ... */``) are treated
+        as full scripts and returned verbatim even when ``**kwargs`` are given: comments
+        frequently carry literal braces (e.g. documented ``{tutor_id}`` URL patterns)
+        that are not template variables and would otherwise break ``str.format``.
         """
         if query and query.strip().endswith(".sql"):
             loaded = load_sql_query(query.strip(), **kwargs)
@@ -724,6 +745,12 @@ class DataConnector:
             self._logger.info(f"Loaded SQL from file: {query}")
             return loaded
         if query and kwargs:
+            if sql_has_comments(query):
+                self._logger.info(
+                    "Inline SQL contains comments; skipping str.format() substitution "
+                    f"of {sorted(kwargs)} and returning the query verbatim."
+                )
+                return query
             try:
                 return query.format(**kwargs)
             except (KeyError, IndexError, ValueError) as e:

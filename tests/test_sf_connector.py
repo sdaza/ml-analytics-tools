@@ -253,6 +253,25 @@ def test_resolve_query_inline_without_kwargs_left_untouched(monkeypatch):
     assert sf._resolve_query(query) == query
 
 
+def test_resolve_query_inline_with_comments_skips_format(monkeypatch):
+    _clear_snowflake_env(monkeypatch)
+    sf = SFConnector(account="acct", user="u")
+    # Comment carries a literal {tutor_id} doc placeholder that is NOT a template var.
+    query = (
+        "-- campaign: exp-target-raf-pilot-{tutor_id}_0_bau\n"
+        "SELECT * FROM t WHERE d = '{date}'"
+    )
+    # Even with kwargs, a commented query is returned verbatim (no str.format).
+    assert sf._resolve_query(query, date="2025-01-01") == query
+
+
+def test_resolve_query_inline_block_comment_skips_format(monkeypatch):
+    _clear_snowflake_env(monkeypatch)
+    sf = SFConnector(account="acct", user="u")
+    query = "/* docs: url ?campaign={tutor_id} */\nSELECT 1"
+    assert sf._resolve_query(query, tutor_id=99) == query
+
+
 def test_resolve_query_inline_bad_template_raises(monkeypatch):
     _clear_snowflake_env(monkeypatch)
     sf = SFConnector(account="acct", user="u")

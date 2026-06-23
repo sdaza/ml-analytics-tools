@@ -471,6 +471,47 @@ def strip_sql_comments(sql_content: str) -> str:
     return "\n".join(line.rstrip() for line in "".join(cleaned).splitlines()).strip()
 
 
+def sql_has_comments(sql_content: str) -> bool:
+    """
+    Return ``True`` if ``sql_content`` contains a SQL comment outside string literals.
+
+    Detects single-line ``--`` comments and block ``/* ... */`` comments while
+    ignoring ``--`` / ``/*`` sequences that appear inside quoted strings. Used to
+    decide whether an inline query is a full SQL script (which must not be passed
+    through ``str.format``) rather than a simple template, since comments commonly
+    contain literal braces (e.g. documented ``{tutor_id}`` URL patterns) that would
+    otherwise break or be wrongly substituted by ``str.format``.
+    """
+    in_string = False
+    string_delimiter = None
+    i = 0
+
+    while i < len(sql_content):
+        char = sql_content[i]
+        next_chars = sql_content[i : i + 2]
+
+        if in_string:
+            if char == string_delimiter:
+                if i + 1 < len(sql_content) and sql_content[i + 1] == char:
+                    i += 2
+                    continue
+                in_string = False
+                string_delimiter = None
+            i += 1
+            continue
+
+        if next_chars in ("--", "/*"):
+            return True
+
+        if char in ("'", '"'):
+            in_string = True
+            string_delimiter = char
+
+        i += 1
+
+    return False
+
+
 def load_sql_query(query_path: str, strip_comments: bool = False, **kwargs) -> str | None:
     """
     Load a SQL query from a file.

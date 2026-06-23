@@ -18,7 +18,7 @@ from .data_connector import (
     _load_private_key_pem_for_spark,
     _snowflake_secret_scope,
 )
-from .utils import get_logger, load_sql_query, log_and_raise_error, resolve_sql_query_paths
+from .utils import get_logger, load_sql_query, log_and_raise_error, resolve_sql_query_paths, sql_has_comments
 
 # Cached Spark session shared across SFConnector instances. Populated lazily by
 # get_spark(); never created at import time so the package stays importable
@@ -250,6 +250,11 @@ class SFConnector:
         via ``str.format`` too, so callers don't have to ``query.format(...)``
         themselves. With no kwargs the string is untouched, so inline SQL containing
         literal ``{`` / ``}`` (JSON, OBJECT_CONSTRUCT, ...) is left alone.
+
+        Inline queries that contain SQL comments (``--`` or ``/* ... */``) are treated
+        as full scripts and returned verbatim even when ``**kwargs`` are given: comments
+        frequently carry literal braces (e.g. documented ``{tutor_id}`` URL patterns)
+        that are not template variables and would otherwise break ``str.format``.
         """
         if query and query.strip().endswith(".sql"):
             loaded = load_sql_query(query.strip(), **kwargs)
@@ -258,6 +263,12 @@ class SFConnector:
             self._logger.info(f"Loaded SQL from file: {query}")
             return loaded
         if query and kwargs:
+            if sql_has_comments(query):
+                self._logger.info(
+                    "Inline SQL contains comments; skipping str.format() substitution "
+                    f"of {sorted(kwargs)} and returning the query verbatim."
+                )
+                return query
             try:
                 return query.format(**kwargs)
             except (KeyError, IndexError, ValueError) as e:
