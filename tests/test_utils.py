@@ -4,7 +4,13 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-from ml_analytics.utils import execute_sql_scripts, get_sql_files, load_sql_query, strip_sql_comments
+from ml_analytics.utils import (
+    execute_sql_scripts,
+    format_sql_ignoring_comments,
+    get_sql_files,
+    load_sql_query,
+    strip_sql_comments,
+)
 
 SQL_FOLDER_NAME = "queries"
 
@@ -166,6 +172,65 @@ class TestLoadSqlQuery:
         monkeypatch.setattr("ml_analytics.utils._databricks_notebook_dir", lambda: None)
 
         assert load_sql_query("sql/experiment.sql", strip_comments=True, n=7) == "SELECT 7 AS n"
+
+    def test_substitutes_placeholders_in_commented_script(self, monkeypatch, tmp_path):
+        # A commented script keeps real placeholders; braces in the comment are left alone.
+        sql_file = tmp_path / "sql" / "experiment.sql"
+        sql_file.parent.mkdir()
+        sql_file.write_text("-- docs: see {tutor_id} url pattern\nSELECT * FROM t WHERE d = '{start_date}'")
+
+        monkeypatch.chdir(tmp_path)
+        monkeypatch.setattr("ml_analytics.utils.find_project_root", lambda *args, **kwargs: None)
+        monkeypatch.setattr("ml_analytics.utils._databricks_notebook_dir", lambda: None)
+
+        result = load_sql_query("sql/experiment.sql", start_date="2026-01-01")
+        assert result == "-- docs: see {tutor_id} url pattern\nSELECT * FROM t WHERE d = '2026-01-01'"
+
+
+class TestFormatSqlIgnoringComments:
+    def test_no_kwargs_returns_verbatim(self):
+        sql = "-- {x}\nSELECT {y}"
+        assert format_sql_ignoring_comments(sql) == sql
+
+    def test_substitutes_code_placeholders(self):
+        assert format_sql_ignoring_comments("SELECT {n} AS n", n=7) == "SELECT 7 AS n"
+
+    def test_skips_single_line_comment(self):
+        sql = "SELECT {n}  -- keep {not_a_var}\nFROM t"
+        assert format_sql_ignoring_comments(sql, n=1) == "SELECT 1  -- keep {not_a_var}\nFROM t"
+
+    def test_skips_block_comment(self):
+        sql = "/* {leave} me */ SELECT {n}"
+        assert format_sql_ignoring_comments(sql, n=1) == "/* {leave} me */ SELECT 1"
+
+    def test_substitutes_placeholder_inside_string_literal(self):
+        # The common pattern: a placeholder wrapped in single quotes must substitute.
+        sql = "SELECT * FROM t WHERE d BETWEEN '{start}' AND '{end}'"
+        assert format_sql_ignoring_comments(sql, start="2026-01-01", end="2026-03-31") == (
+            "SELECT * FROM t WHERE d BETWEEN '2026-01-01' AND '2026-03-31'"
+        )
+
+    def test_comment_token_inside_string_is_not_a_comment(self):
+        # A '--' inside a string literal must not start a comment; {n} after it substitutes.
+        sql = "SELECT 'a -- b' AS v, {n} AS n"
+        assert format_sql_ignoring_comments(sql, n=1) == "SELECT 'a -- b' AS v, 1 AS n"
+
+    def test_handles_doubled_quote_escape_in_string(self):
+        sql = "SELECT 'it''s here' AS v, {n} AS n"
+        assert format_sql_ignoring_comments(sql, n=3) == "SELECT 'it''s here' AS v, 3 AS n"
+
+    def test_literal_braces_in_string_must_be_escaped(self):
+        # JSON-style braces in a string get formatted too, so they must be escaped as {{ }}.
+        sql = "SELECT '{{\"a\": 1}}' AS j, {n} AS n"
+        assert format_sql_ignoring_comments(sql, n=2) == 'SELECT \'{"a": 1}\' AS j, 2 AS n'
+
+    def test_escaped_braces_in_code(self):
+        # Doubled braces in a code region are unescaped by str.format as usual.
+        assert format_sql_ignoring_comments("SELECT {n} AS {{lit}}", n=1) == "SELECT 1 AS {lit}"
+
+    def test_missing_placeholder_raises_keyerror(self):
+        with pytest.raises(KeyError):
+            format_sql_ignoring_comments("SELECT {missing}", n=1)
 
 
 class TestStripSqlComments:

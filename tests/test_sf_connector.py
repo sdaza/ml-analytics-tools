@@ -253,21 +253,25 @@ def test_resolve_query_inline_without_kwargs_left_untouched(monkeypatch):
     assert sf._resolve_query(query) == query
 
 
-def test_resolve_query_inline_with_comments_skips_format(monkeypatch):
+def test_resolve_query_inline_substitutes_code_but_not_comment(monkeypatch):
     _clear_snowflake_env(monkeypatch)
     sf = SFConnector(account="acct", user="u")
-    # Comment carries a literal {tutor_id} doc placeholder that is NOT a template var.
+    # Comment carries a literal {tutor_id} doc placeholder that is NOT a template var;
+    # the quoted '{date}' in the SQL body IS a real placeholder and must substitute.
     query = (
         "-- campaign: exp-target-raf-pilot-{tutor_id}_0_bau\n"
         "SELECT * FROM t WHERE d = '{date}'"
     )
-    # Even with kwargs, a commented query is returned verbatim (no str.format).
-    assert sf._resolve_query(query, date="2025-01-01") == query
+    assert sf._resolve_query(query, date="2025-01-01") == (
+        "-- campaign: exp-target-raf-pilot-{tutor_id}_0_bau\n"
+        "SELECT * FROM t WHERE d = '2025-01-01'"
+    )
 
 
-def test_resolve_query_inline_block_comment_skips_format(monkeypatch):
+def test_resolve_query_inline_block_comment_braces_preserved(monkeypatch):
     _clear_snowflake_env(monkeypatch)
     sf = SFConnector(account="acct", user="u")
+    # Brace lives only in the block comment, so it is left verbatim.
     query = "/* docs: url ?campaign={tutor_id} */\nSELECT 1"
     assert sf._resolve_query(query, tutor_id=99) == query
 

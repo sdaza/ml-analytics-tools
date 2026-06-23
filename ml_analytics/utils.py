@@ -107,6 +107,44 @@ def _get_dbutils():
     return _DBUTILS
 
 
+def databricks_current_user() -> str | None:
+    """
+    Return the current Databricks user's email, or None when unavailable.
+
+    Works in notebooks and jobs on the Databricks runtime; returns None
+    everywhere else (local / non-Spark) so callers can fall back gracefully.
+    """
+    dbutils = _get_dbutils()
+    if dbutils is None:
+        return None
+
+    try:
+        ctx = dbutils.notebook.entry_point.getDbutils().notebook().getContext()
+        user = ctx.userName().get()
+    except Exception:
+        return None
+
+    return user or None
+
+
+def databricks_secret_scopes() -> list[str]:
+    """
+    Return the names of all Databricks secret scopes, or [] when unavailable.
+
+    Works in notebooks and jobs on the Databricks runtime; returns [] everywhere
+    else (local / non-Spark) or when the secrets API can't be listed, so callers
+    can treat it as "no extra scopes discovered" and fall back gracefully.
+    """
+    dbutils = _get_dbutils()
+    if dbutils is None:
+        return []
+
+    try:
+        return [scope.name for scope in dbutils.secrets.listScopes()]
+    except Exception:
+        return []
+
+
 def _databricks_notebook_dir() -> Path | None:
     """
     Return the active Databricks notebook's workspace filesystem directory.
@@ -512,6 +550,110 @@ def sql_has_comments(sql_content: str) -> bool:
     return False
 
 
+def format_sql_ignoring_comments(sql_content: str, **kwargs) -> str:
+    """
+    Apply ``str.format(**kwargs)`` to SQL, substituting ``{placeholder}`` tokens
+    everywhere EXCEPT inside ``--`` / ``/* ... */`` comments.
+
+    Comments are copied verbatim, so literal braces documented in a comment
+    (e.g. ``{tutor_id}`` URL patterns) never break or get wrongly substituted.
+    String literals ARE substituted, because SQL commonly wraps real
+    placeholders in quotes (``WHERE lesson_ts >= '{start_date}'``); the function
+    only tracks string state so a ``--`` / ``/*`` sequence inside a string is not
+    mistaken for a comment start. If a string literal contains literal braces
+    that are NOT placeholders (e.g. JSON / ``OBJECT_CONSTRUCT`` payloads), escape
+    them as ``{{`` / ``}}`` or call without ``kwargs``.
+
+    With no ``kwargs`` the content is returned unchanged. A missing placeholder
+    raises ``KeyError`` and an unbalanced/invalid brace raises ``ValueError`` /
+    ``IndexError`` — same as ``str.format`` — so callers can surface a message.
+    """
+    if not kwargs:
+        return sql_content
+
+    out = []
+    code = []  # consecutive non-comment characters pending str.format substitution
+
+    in_single_line_comment = False
+    in_multi_line_comment = False
+    in_string = False
+    string_delimiter = None
+    i = 0
+    n = len(sql_content)
+
+    def flush_code():
+        if code:
+            out.append("".join(code).format(**kwargs))
+            code.clear()
+
+    while i < n:
+        char = sql_content[i]
+        next_chars = sql_content[i : i + 2]
+
+        # Inside a single-line comment: copy verbatim until newline.
+        if in_single_line_comment:
+            out.append(char)
+            if char == "\n":
+                in_single_line_comment = False
+            i += 1
+            continue
+
+        # Inside a block comment: copy verbatim until '*/'.
+        if in_multi_line_comment:
+            out.append(char)
+            if next_chars == "*/":
+                out.append(sql_content[i + 1])
+                in_multi_line_comment = False
+                i += 2
+                continue
+            i += 1
+            continue
+
+        # Inside a string literal: still substituted (placeholders are commonly
+        # quoted), so the content stays in the code buffer. We only track the
+        # closing quote — honoring doubled-quote escapes — so a '--' / '/*' here
+        # is treated as string content, not a comment start.
+        if in_string:
+            code.append(char)
+            if char == string_delimiter:
+                if i + 1 < n and sql_content[i + 1] == char:
+                    code.append(sql_content[i + 1])
+                    i += 2
+                    continue
+                in_string = False
+                string_delimiter = None
+            i += 1
+            continue
+
+        # Outside strings/comments: a comment may start here. Flush pending code
+        # first so the verbatim comment is appended after the substituted code.
+        if next_chars == "--":
+            flush_code()
+            in_single_line_comment = True
+            out.append(next_chars)
+            i += 2
+            continue
+        if next_chars == "/*":
+            flush_code()
+            in_multi_line_comment = True
+            out.append(next_chars)
+            i += 2
+            continue
+        if char in ("'", '"'):
+            in_string = True
+            string_delimiter = char
+            code.append(char)
+            i += 1
+            continue
+
+        # Regular code character.
+        code.append(char)
+        i += 1
+
+    flush_code()
+    return "".join(out)
+
+
 def load_sql_query(query_path: str, strip_comments: bool = False, **kwargs) -> str | None:
     """
     Load a SQL query from a file.
@@ -523,6 +665,14 @@ def load_sql_query(query_path: str, strip_comments: bool = False, **kwargs) -> s
     When ``strip_comments`` is True, SQL comments are removed before template
     substitution. This is useful for connectors that wrap queries internally and
     can mis-handle leading ``--`` comments.
+
+    Template substitution is only applied when ``**kwargs`` are given, and it is
+    comment- and string-aware: ``{placeholder}`` tokens are substituted only in
+    actual SQL code, never inside ``--`` / ``/* ... */`` comments or quoted
+    string literals. This lets a commented script keep real ``{start_date}``
+    placeholders while leaving literal braces in comments (e.g. documented
+    ``{tutor_id}`` URL patterns) or string payloads (JSON, ``OBJECT_CONSTRUCT``)
+    untouched. See ``format_sql_ignoring_comments``.
     """
     logger = get_logger("ml_analytics.utils.load_sql_query")
 
@@ -549,7 +699,9 @@ def load_sql_query(query_path: str, strip_comments: bool = False, **kwargs) -> s
                 sql_content = file.read()
                 if strip_comments:
                     sql_content = strip_sql_comments(sql_content)
-                return sql_content.format(**kwargs)
+                if not kwargs:
+                    return sql_content
+                return format_sql_ignoring_comments(sql_content, **kwargs)
 
         logger.error(f"SQL file '{query_path}' not found. Checked: {checked_paths}.")
         return None

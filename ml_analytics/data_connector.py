@@ -19,11 +19,11 @@ import redshift_connector
 from .s3_connector import S3Connector
 from .utils import (
     _split_sql_statements,
+    format_sql_ignoring_comments,
     get_credential_value,
     get_logger,
     load_sql_query,
     log_and_raise_error,
-    sql_has_comments,
 )
 
 SNOWFLAKE_SPARK_SOURCE_NAME = "net.snowflake.spark.snowflake"
@@ -729,14 +729,16 @@ class DataConnector:
         If it looks like a SQL file path, load it (applying ``**kwargs`` as
         ``str.format`` template variables). Otherwise it's an inline query: it is
         returned as-is, except that when ``**kwargs`` are provided they are applied
-        via ``str.format`` too, so callers don't have to ``query.format(...)``
-        themselves. With no kwargs the string is untouched, so inline SQL containing
-        literal ``{`` / ``}`` (JSON, OBJECT_CONSTRUCT, ...) is left alone.
+        too, so callers don't have to ``query.format(...)`` themselves. With no
+        kwargs the string is untouched, so inline SQL containing literal ``{`` /
+        ``}`` (JSON, OBJECT_CONSTRUCT, ...) is left alone.
 
-        Inline queries that contain SQL comments (``--`` or ``/* ... */``) are treated
-        as full scripts and returned verbatim even when ``**kwargs`` are given: comments
-        frequently carry literal braces (e.g. documented ``{tutor_id}`` URL patterns)
-        that are not template variables and would otherwise break ``str.format``.
+        Substitution is comment- and string-aware: ``{placeholder}`` tokens are
+        replaced only in actual SQL code, never inside ``--`` / ``/* ... */``
+        comments or quoted string literals. A commented script can therefore keep
+        real ``{start_date}`` placeholders while literal braces in comments (e.g.
+        documented ``{tutor_id}`` URL patterns) or string payloads are preserved.
+        See ``format_sql_ignoring_comments``.
         """
         if query and query.strip().endswith(".sql"):
             loaded = load_sql_query(query.strip(), **kwargs)
@@ -745,14 +747,8 @@ class DataConnector:
             self._logger.info(f"Loaded SQL from file: {query}")
             return loaded
         if query and kwargs:
-            if sql_has_comments(query):
-                self._logger.info(
-                    "Inline SQL contains comments; skipping str.format() substitution "
-                    f"of {sorted(kwargs)} and returning the query verbatim."
-                )
-                return query
             try:
-                return query.format(**kwargs)
+                return format_sql_ignoring_comments(query, **kwargs)
             except (KeyError, IndexError, ValueError) as e:
                 log_and_raise_error(
                     self._logger,

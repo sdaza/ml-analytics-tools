@@ -25,7 +25,13 @@ from google_auth_oauthlib.flow import InstalledAppFlow
 from googleapiclient.discovery import build
 from googleapiclient.errors import HttpError
 
-from .utils import get_credential_value, get_logger, log_and_raise_error
+from .utils import (
+    databricks_current_user,
+    databricks_secret_scopes,
+    get_credential_value,
+    get_logger,
+    log_and_raise_error,
+)
 
 
 class GSheet:
@@ -142,7 +148,7 @@ class GSheet:
         credentials_json: dict = None,
         scopes: list[str] = None,
         log_level: str = "INFO",
-        scope: str = "ml",
+        scope: str = None,
         spreadsheet_id: str = None,
     ):
         """
@@ -160,8 +166,12 @@ class GSheet:
         log_level : str, optional
             Logging level. Default is "INFO".
         scope : str, optional
-            Scope for mounted secrets (e.g., '/mnt/{scope}/GOOGLE_CREDENTIALS').
-            Default is "ml".
+            Databricks secret scope / mounted-secret scope to read credentials
+            from (e.g. ``dbutils.secrets.get(scope, "GOOGLE_CREDENTIALS")`` or
+            ``/mnt/{scope}/GOOGLE_CREDENTIALS``). When omitted, the scope is
+            auto-detected: on Databricks the current user's personal scope
+            ``user-<email>`` is tried first, then ``ml``. Pass an explicit value
+            to bypass auto-detection and use only that scope.
         spreadsheet_id : str, optional
             Default spreadsheet ID used by any method that accepts a ``spreadsheet_id``
             argument. A ``spreadsheet_id`` passed to an individual method call always
@@ -183,6 +193,9 @@ class GSheet:
         >>> # Using mounted secrets with a custom scope
         >>> gsheet = GSheet(scope="custom-scope")
         >>>
+        >>> # On Databricks, auto-detect the personal secret scope (user-<email>)
+        >>> gsheet = GSheet()  # reads GOOGLE_CREDENTIALS from your personal scope
+        >>>
         >>> # Bind a default spreadsheet ID so later calls can omit it
         >>> gsheet = GSheet(spreadsheet_id="1BxiMVs0XRA5nFMdKvBdBZjgmUUqptlbs74OgvE2upms")
         >>> gsheet.read_sheet()  # uses the bound ID
@@ -190,7 +203,11 @@ class GSheet:
         """
         self._logger = get_logger("GSheet")
         self._logger.setLevel(log_level)
-        self._scope = scope
+        # Ordered list of secret scopes to try when loading credentials. An
+        # explicit scope is used as-is; otherwise auto-detect the Databricks
+        # personal scope (user-<email>) and fall back to the legacy "ml" scope.
+        self._scopes = self._resolve_secret_scopes(scope)
+        self._scope = self._scopes[0]
 
         if scopes is None:
             self.scopes = [
@@ -228,7 +245,36 @@ class GSheet:
                 self._logger.debug("Using GSHEET_SPREADSHEET_ID from environment")
         self.spreadsheet_id = spreadsheet_id
 
-    def _assemble_credentials_from_components(self) -> dict | None:
+    @staticmethod
+    def _resolve_secret_scopes(scope: str = None) -> list[str]:
+        """
+        Build the ordered list of secret scopes to try when loading credentials.
+
+        An explicit ``scope`` is used on its own. When omitted, the scopes are
+        auto-detected on Databricks: the current user's personal scope
+        (``user-<email>``) is tried first (if the email is resolvable), then the
+        legacy ``ml`` scope, then every other secret scope that actually exists
+        on the workspace (discovered via ``dbutils.secrets.listScopes()``), so a
+        non-conventionally named scope holding the credentials is still found.
+        Outside Databricks this resolves to just ``["ml"]``.
+        """
+        if scope is not None:
+            return [scope]
+
+        scopes = []
+        user = databricks_current_user()
+        if user and "@" in user:
+            scopes.append(f"user-{user}")
+        scopes.append("ml")
+        # Append any other scopes that exist on this workspace, preserving the
+        # preferred order above and skipping duplicates. _load_credentials_from_scopes
+        # then probes each in turn for the credentials.
+        for discovered in databricks_secret_scopes():
+            if discovered not in scopes:
+                scopes.append(discovered)
+        return scopes
+
+    def _assemble_credentials_from_components(self, scope: str) -> dict | None:
         """
         Assemble Google service account credentials from individual Vault secrets.
 
@@ -247,12 +293,12 @@ class GSheet:
         """
         try:
             # Fetch all required credential components
-            project_id = get_credential_value("GOOGLE_PROJECT_ID", scope=self._scope)
-            private_key_id = get_credential_value("GOOGLE_API_PKEY_ID", scope=self._scope)
-            private_key = get_credential_value("GOOGLE_API_PKEY", scope=self._scope)
-            client_email = get_credential_value("GOOGLE_CLIENT_EMAIL", scope=self._scope)
-            client_id = get_credential_value("GOOGLE_CLIENT_ID", scope=self._scope)
-            cert_url = get_credential_value("GOOGLE_CERT_URL", scope=self._scope)
+            project_id = get_credential_value("GOOGLE_PROJECT_ID", scope=scope)
+            private_key_id = get_credential_value("GOOGLE_API_PKEY_ID", scope=scope)
+            private_key = get_credential_value("GOOGLE_API_PKEY", scope=scope)
+            client_email = get_credential_value("GOOGLE_CLIENT_EMAIL", scope=scope)
+            client_id = get_credential_value("GOOGLE_CLIENT_ID", scope=scope)
+            cert_url = get_credential_value("GOOGLE_CERT_URL", scope=scope)
 
             # Handle escaped newlines in private key (common in Vault)
             if "\\n" in private_key:
@@ -279,6 +325,29 @@ class GSheet:
             self._logger.debug(f"Could not assemble credentials from individual components: {e}")
             return None
 
+    def _load_credentials_from_scopes(self) -> dict | None:
+        """
+        Load Google service account credentials by trying each candidate scope.
+
+        Iterates over ``self._scopes`` (an environment-variable read is scope
+        independent and resolves on the first attempt). For each scope it first
+        looks for a single ``GOOGLE_CREDENTIALS`` JSON blob, then falls back to
+        assembling the credentials from individual component secrets. Returns the
+        first credentials dictionary found, or ``None`` if no scope yields any.
+        """
+        for scope in self._scopes:
+            try:
+                credentials_str = get_credential_value("GOOGLE_CREDENTIALS", scope=scope)
+                self._logger.debug(f"Using GOOGLE_CREDENTIALS from scope '{scope}'")
+                return json.loads(credentials_str)
+            except Exception:
+                # No single-JSON credential in this scope; try component secrets.
+                credentials_json = self._assemble_credentials_from_components(scope)
+                if credentials_json is not None:
+                    self._logger.debug(f"Using assembled component credentials from scope '{scope}'")
+                    return credentials_json
+        return None
+
     def _initialize_credentials(
         self, credentials_path: str | Path = None, credentials_json: dict = None
     ) -> "service_account.Credentials | OAuthCredentials":
@@ -300,14 +369,10 @@ class GSheet:
         """
         # Try to auto-load from default location if no credentials provided
         if credentials_path is None and credentials_json is None:
-            # First try to get credentials from environment variable or mounted secret (single JSON)
-            try:
-                credentials_str = get_credential_value("GOOGLE_CREDENTIALS", scope=self._scope)
-                credentials_json = json.loads(credentials_str)
-                self._logger.debug("Using GOOGLE_CREDENTIALS from environment or mounted secret")
-            except Exception:
-                # Try assembling from individual Vault secrets
-                credentials_json = self._assemble_credentials_from_components()
+            # Try each candidate secret scope in order (e.g. the Databricks
+            # personal scope first, then "ml"). Returns the first scope that
+            # yields a GOOGLE_CREDENTIALS JSON or assembled component secrets.
+            credentials_json = self._load_credentials_from_scopes()
 
             if credentials_json is None:
                 # OAuth fallback: only when OAuth env vars set and no SA creds found.

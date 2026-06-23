@@ -952,6 +952,16 @@ class TestGSheetOAuth:
         monkeypatch.setenv("GOOGLE_CLOUD_PROJECT", "my-gcp-project")
         monkeypatch.setenv("GSHEET_TOKEN_PATH", str(token_path))
 
+        # Isolate from any real Databricks workspace the host may be authenticated
+        # to: no service-account secret is discoverable, so the OAuth path is taken.
+        monkeypatch.setattr("ml_analytics.gsheet_connector.databricks_secret_scopes", lambda: [])
+        monkeypatch.setattr("ml_analytics.gsheet_connector.databricks_current_user", lambda: None)
+
+        def _no_secret(name, scope="ml"):
+            raise Exception(f"no credential '{name}' in scope '{scope}'")
+
+        monkeypatch.setattr("ml_analytics.gsheet_connector.get_credential_value", _no_secret)
+
     def test_oauth_runs_flow_when_no_token(self, monkeypatch, tmp_path, mock_google_api_services):
         token_file = tmp_path / "sub" / "token.json"  # missing parent dir -> exercises mkdir
         self._set_oauth_env(monkeypatch, token_file)
