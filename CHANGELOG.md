@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.5.2](https://github.com/sdaza/ml-analytics-tools/compare/ml-analytics-tools-v0.5.1...ml-analytics-tools-v0.5.2) (2026-06-23)
+
+
+### Bug Fixes
+
+* **data_connector, sf_connector:** enhance SQL query handling to skip formatting for inline comments ([020d7ce](https://github.com/sdaza/ml-analytics-tools/commit/020d7cec80cea349cbafe12e08e3d2185afedb3c))
+
 ## [0.5.1](https://github.com/sdaza/ml-analytics-tools/compare/ml-analytics-tools-v0.5.0...ml-analytics-tools-v0.5.1) (2026-06-19)
 
 
