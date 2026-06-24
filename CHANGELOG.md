@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.5.5](https://github.com/sdaza/ml-analytics-tools/compare/ml-analytics-tools-v0.5.4...ml-analytics-tools-v0.5.5) (2026-06-24)
+
+
+### Bug Fixes
+
+* clear sheet before writing ([c213751](https://github.com/sdaza/ml-analytics-tools/commit/c2137515d9319e12d41c5625e5295a69d5135944))
+
 ## [0.5.4](https://github.com/sdaza/ml-analytics-tools/compare/ml-analytics-tools-v0.5.3...ml-analytics-tools-v0.5.4) (2026-06-24)
 
 
