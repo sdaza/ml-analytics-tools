@@ -152,11 +152,31 @@ def _get_snowflake_config_value(name: str, explicit=None, secret_scope: str = No
 
 
 def _read_private_key_pem(private_key: str | bytes = None, private_key_path: str = None) -> bytes | None:
-    """Read Snowflake private key material from an env value or a local file path."""
+    """Read Snowflake private key material from an env value or a local file path.
+
+    Inline PEM material (typically stored in a single ``SNOWFLAKE_PRIVATE_KEY``
+    env line) is normalized so it parses regardless of how it was quoted or how
+    its line breaks were encoded: surrounding quotes/whitespace are stripped and
+    escaped ``\\r\\n`` / ``\\n`` / ``\\r`` sequences are turned into real
+    newlines. A file path is read as raw bytes and left untouched.
+    """
     if private_key:
         pem_bytes = private_key if isinstance(private_key, bytes) else private_key.encode()
-        if b"\\n" in pem_bytes and b"\n" not in pem_bytes:
-            pem_bytes = pem_bytes.replace(b"\\n", b"\n")
+
+        # Trim surrounding whitespace and a single layer of matching quotes that
+        # an env value can pick up (e.g. SNOWFLAKE_PRIVATE_KEY="...").
+        pem_bytes = pem_bytes.strip()
+        for quote in (b'"', b"'"):
+            if len(pem_bytes) >= 2 and pem_bytes[:1] == quote and pem_bytes[-1:] == quote:
+                pem_bytes = pem_bytes[1:-1].strip()
+                break
+
+        # Convert escaped newlines to real ones. Done whenever escapes are present
+        # (not only when no real newline exists), so a stray real newline — e.g. a
+        # trailing one from the .env file — doesn't leave literal "\n" in the body
+        # and trip cryptography with a MalformedFraming / InvalidData error.
+        if b"\\n" in pem_bytes or b"\\r" in pem_bytes:
+            pem_bytes = pem_bytes.replace(b"\\r\\n", b"\n").replace(b"\\n", b"\n").replace(b"\\r", b"\n")
         return pem_bytes
 
     if private_key_path:
