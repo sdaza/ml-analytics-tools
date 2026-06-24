@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.5.4](https://github.com/sdaza/ml-analytics-tools/compare/ml-analytics-tools-v0.5.3...ml-analytics-tools-v0.5.4) (2026-06-24)
+
+
+### Bug Fixes
+
+* update key-pair setup for snowflake ([aeb75c9](https://github.com/sdaza/ml-analytics-tools/commit/aeb75c91baefc8fd060d72265ba2c471814216da))
+
 ## [0.5.3](https://github.com/sdaza/ml-analytics-tools/compare/ml-analytics-tools-v0.5.2...ml-analytics-tools-v0.5.3) (2026-06-23)
 
 
