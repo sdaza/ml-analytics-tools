@@ -712,11 +712,17 @@ class GSheet:
 
         try:
             if clear_before_write:
+                # Passing just the sheet/tab name (no cell range) to the
+                # values().clear() API wipes the entire grid of that tab.
                 if "!" in range_name:
-                    sheet_part = range_name.split("!")[0]
-                    clear_range_full = f"{sheet_part}!A1:ZZZ100000"
+                    clear_range_full = range_name.split("!")[0]
                 else:
-                    clear_range_full = "A1:ZZZ100000"
+                    # No explicit sheet in the range: clear the first sheet.
+                    first_sheet = self.service.spreadsheets().get(
+                        spreadsheetId=spreadsheet_id,
+                        fields="sheets(properties(title))",
+                    ).execute()["sheets"][0]["properties"]["title"]
+                    clear_range_full = self._format_sheet_name(first_sheet)
                 self.clear_range(spreadsheet_id, clear_range_full)
 
             # Write the data
