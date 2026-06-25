@@ -375,6 +375,24 @@ class GSheet:
             credentials_json = self._load_credentials_from_scopes()
 
             if credentials_json is None:
+                # Service-account file pointed to by an environment variable.
+                # Honors our explicit GOOGLE_SERVICE_ACCOUNT_PATH and the standard
+                # Google ADC variable GOOGLE_APPLICATION_CREDENTIALS, so a path set
+                # in the environment works without it living in the project dir.
+                env_path = os.environ.get("GOOGLE_SERVICE_ACCOUNT_PATH") or os.environ.get(
+                    "GOOGLE_APPLICATION_CREDENTIALS"
+                )
+                if env_path:
+                    candidate = Path(env_path).expanduser()
+                    if candidate.exists():
+                        self._logger.debug(f"Using credentials file from environment: {candidate}")
+                        credentials_path = candidate
+                    else:
+                        self._logger.warning(
+                            f"Credentials path from environment does not exist: {candidate}"
+                        )
+
+            if credentials_path is None and credentials_json is None:
                 # OAuth fallback: only when OAuth env vars set and no SA creds found.
                 if os.environ.get("GOOGLE_OAUTH_CLIENT_ID") and os.environ.get("GOOGLE_OAUTH_CLIENT_SECRET"):
                     return self._initialize_oauth_credentials()
