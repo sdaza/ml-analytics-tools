@@ -1,5 +1,17 @@
 # Changelog
 
+## [0.6.0](https://github.com/sdaza/ml-analytics-tools/compare/ml-analytics-tools-v0.5.5...ml-analytics-tools-v0.6.0) (2026-06-25)
+
+
+### Features
+
+* make modeling deps optional and add local Databricks Connect support ([a1591c3](https://github.com/sdaza/ml-analytics-tools/commit/a1591c3fafcb51b8e9f3f5663f20e077cc32aca6))
+
+
+### Bug Fixes
+
+* **ci:** install [modeling] extra and skip modeling tests when absent ([77d7d3e](https://github.com/sdaza/ml-analytics-tools/commit/77d7d3e7bc1af299765596e2d95a0a3dfe2fe632))
+
 ## [0.5.5](https://github.com/sdaza/ml-analytics-tools/compare/ml-analytics-tools-v0.5.4...ml-analytics-tools-v0.5.5) (2026-06-24)
 
 
