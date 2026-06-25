@@ -34,27 +34,61 @@ _spark_ctx = None
 
 def get_spark():
     """
-    Get or create a cached Spark session, importing PySpark lazily.
+    Get or create a cached Spark session that works both locally and on Databricks.
 
-    PySpark is not a dependency of this package; it must be provided by the
-    runtime (e.g. Databricks) or installed separately. The active session is
-    reused when one exists (the normal case on Databricks), so we attach to the
-    cluster session rather than spinning up a local one.
+    Neither PySpark nor Databricks Connect is a dependency of this package; both
+    are imported lazily so the rest of the package stays usable without them.
+
+    Resolution order:
+
+    1. Reuse an active :class:`SparkSession` if one exists. This is the normal
+       case inside a Databricks notebook/cluster, where ``spark`` is already
+       provided, so we attach to it rather than spinning up a new one.
+    2. Otherwise create a Databricks Connect session
+       (``DatabricksSession.builder.getOrCreate()``). This is the local-dev case:
+       it connects to a remote cluster/serverless using your Databricks config
+       (profile / env vars), so no notebook boilerplate is needed.
+    3. Otherwise fall back to a plain local ``SparkSession``.
+
+    This means a single ``spark = get_spark()`` line behaves correctly whether the
+    code runs locally via Databricks Connect or as a notebook on Databricks.
     """
     global _spark_ctx
     if _spark_ctx is not None:
         return _spark_ctx
 
+    # 1. Reuse an active session (the normal case inside a Databricks notebook/cluster).
+    try:
+        from pyspark.sql import SparkSession
+
+        active = SparkSession.getActiveSession()
+        if active is not None:
+            _spark_ctx = active
+            return _spark_ctx
+    except ImportError:
+        # PySpark itself isn't installed; Databricks Connect (below) ships its own.
+        pass
+
+    # 2. Try Databricks Connect (local dev against a remote cluster/serverless).
+    try:
+        from databricks.connect import DatabricksSession
+
+        _spark_ctx = DatabricksSession.builder.getOrCreate()
+        return _spark_ctx
+    except ImportError:
+        pass
+
+    # 3. Fall back to a plain local Spark session.
     try:
         from pyspark.sql import SparkSession
     except ImportError as exc:
         raise ImportError(
-            "SFConnector requires PySpark, which is not a dependency of "
-            "ml-analytics-tools. Run it on a Spark runtime (e.g. Databricks) "
-            "or install it with `pip install pyspark`."
+            "SFConnector needs a Spark session but neither PySpark nor Databricks "
+            "Connect is available. Run it on a Spark runtime (e.g. Databricks) or "
+            "install one locally with `pip install databricks-connect`."
         ) from exc
 
-    _spark_ctx = SparkSession.getActiveSession() or SparkSession.builder.appName("ml_analytics").getOrCreate()
+    _spark_ctx = SparkSession.builder.appName("ml_analytics").getOrCreate()
     return _spark_ctx
 
 

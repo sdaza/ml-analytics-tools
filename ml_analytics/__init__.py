@@ -7,9 +7,8 @@ from dotenv import load_dotenv
 from .aws_auth import ensure_aws_authenticated, ensure_aws_sso_login
 from .data_connector import DataConnector
 from .gsheet_connector import GSheet
-from .model_manager import ModelManager
 from .s3_connector import S3Connector
-from .sf_connector import SFConnector
+from .sf_connector import SFConnector, get_spark
 from .slack_connector import SlackConnector
 from .utils import (
     execute_sql_scripts,
@@ -38,6 +37,33 @@ try:
 except Exception:
     logger.debug("No .env file loaded.")
 
+
+# Lazily-loaded public symbols that depend on the optional `[modeling]` extra.
+# Importing them eagerly would pull mlflow (and its numpy pins) into every
+# `import ml_analytics`, which is exactly what we want to avoid. They are
+# resolved on first access via the module-level __getattr__ below (PEP 562).
+_OPTIONAL_ATTRS = {
+    "ModelManager": ".model_manager",
+}
+
+
+def __getattr__(name):
+    target = _OPTIONAL_ATTRS.get(name)
+    if target is not None:
+        import importlib
+
+        try:
+            module = importlib.import_module(target, __name__)
+        except ImportError as exc:
+            raise ImportError(
+                f"{name} requires the optional 'modeling' dependencies "
+                f"(mlflow, scikit-learn, catboost, shap, lifelines, seaborn). "
+                f"Install them with `pip install ml-analytics-tools[modeling]`."
+            ) from exc
+        return getattr(module, name)
+    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
+
+
 __all__ = [
     "DataConnector",
     "ensure_aws_authenticated",
@@ -46,6 +72,7 @@ __all__ = [
     "find_project_root",
     "get_credential_value",
     "get_logger",
+    "get_spark",
     "get_sql_files",
     "GSheet",
     "load_sql_query",

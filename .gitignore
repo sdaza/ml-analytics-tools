@@ -5,6 +5,7 @@
 mlruns/
 .python-version
 ml_analytics_tools.egg-info
+build/
 __pycache__/
 tests/interactive.py
 .idea

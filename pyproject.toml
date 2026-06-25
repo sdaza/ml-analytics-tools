@@ -4,9 +4,14 @@ version = "0.5.5"
 description = "Tools for ML projects and data management"
 readme = "README.md"
 requires-python = ">=3.11"
+# Core dependencies: the data connectors (Snowflake, Redshift, S3, Google
+# Sheets, Slack) and their light support libs. The heavy ML/modeling stack
+# (mlflow, scikit-learn, catboost, shap, lifelines, plotting) is intentionally
+# NOT here — it pins numpy hard and conflicts with host environments such as
+# Databricks. Install it via the `[modeling]` extra when you need ModelManager
+# or ml_analytics.model_tools.
 dependencies = [
     "boto3>=1.37.24",
-    "catboost>=1.2.8",
     "ddtrace>=3.4.1",
     "dotenv>=0.9.9",
     "duckdb>=1.4.1",
@@ -15,22 +20,42 @@ dependencies = [
     "google-auth-httplib2>=0.2.0",
     "google-auth-oauthlib>=1.2.0",
     "ipykernel>=6.29.5",
-    "lifelines>=0.30.3",
-    "mlflow==3.10.1",
-    "mlflow[auth]==3.10.1",
+    "ipywidgets>=8.1.8",
     "pip>=25.3",
-    "polars==1.30.0",
+    "polars>=1.30.0",
     "pytest>=8.3.5",
     "pyyaml>=6.0.2",
     "redshift-connector>=2.1.9",
     "ruff>=0.11.4",
     "schedule>=1.2.2",
-    "scikit-learn==1.5.2",
-    "seaborn>=0.13.2",
     "setuptools>=42.0.0",
-    "shap>=0.47.2",
     "slack-sdk>=3.27.0",
     "snowflake-connector-python[pandas,secure-local-storage]>=4.6.0",
+]
+
+[project.optional-dependencies]
+# ML/modeling stack used by ModelManager (mlflow) and ml_analytics.model_tools
+# (scikit-learn, catboost, shap, lifelines, plotting). Kept optional because
+# these pin numpy and conflict with host environments. Version floors are `>=`
+# (not `==`) so the resolver can pick numpy-compatible builds.
+#   pip install ml-analytics-tools[modeling]
+modeling = [
+    "mlflow>=3.10.1",
+    "mlflow[auth]>=3.10.1",
+    "scikit-learn>=1.5.2",
+    "catboost>=1.2.8",
+    "shap>=0.47.2",
+    "lifelines>=0.30.3",
+    "seaborn>=0.13.2",
+]
+
+# Local development against a remote Databricks cluster/serverless.
+# Do NOT install on a Databricks cluster: databricks-connect shadows the
+# runtime's built-in PySpark and breaks notebook Spark sessions. On Databricks,
+# get_spark() reuses the active session and never needs this.
+#   pip install ml-analytics-tools[databricks]
+databricks = [
+    "databricks-connect>=15.1",
 ]
 
 [project.scripts]
