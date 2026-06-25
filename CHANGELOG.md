@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.7.0](https://github.com/sdaza/ml-analytics-tools/compare/ml-analytics-tools-v0.6.0...ml-analytics-tools-v0.7.0) (2026-06-25)
+
+
+### Features
+
+* **gsheet:** resolve credentials from GOOGLE_APPLICATION_CREDENTIALS / GOOGLE_SERVICE_ACCOUNT_PATH ([e179fca](https://github.com/sdaza/ml-analytics-tools/commit/e179fca30553cd548be249ecc10f00c00b8d8dda))
+
 ## [0.6.0](https://github.com/sdaza/ml-analytics-tools/compare/ml-analytics-tools-v0.5.5...ml-analytics-tools-v0.6.0) (2026-06-25)
 
 
