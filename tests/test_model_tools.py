@@ -3,10 +3,15 @@
 import numpy as np
 import pandas as pd
 import pytest
-from sklearn.metrics import (
+
+# model_tools depends on the optional [modeling] extra (scikit-learn, lifelines,
+# ...); skip the whole module when it isn't installed instead of erroring.
+pytest.importorskip("sklearn")
+
+from sklearn.metrics import (  # noqa: E402
     auc as sk_auc,
 )
-from sklearn.metrics import (
+from sklearn.metrics import (  # noqa: E402
     f1_score,
     precision_recall_curve,
     precision_score,
@@ -14,7 +19,7 @@ from sklearn.metrics import (
     roc_auc_score,
 )
 
-from ml_analytics.model_tools import (
+from ml_analytics.model_tools import (  # noqa: E402
     get_balanced_accuracy,
     get_features,
     get_metrics,

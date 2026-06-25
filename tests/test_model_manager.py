@@ -4,9 +4,15 @@ from unittest.mock import MagicMock, patch
 import numpy as np
 import pandas as pd
 import pytest
-from sklearn.ensemble import RandomForestClassifier
 
-import ml_analytics.model_manager as model_manager_module
+# ModelManager depends on the optional [modeling] extra (mlflow, scikit-learn);
+# skip the whole module when those deps aren't installed instead of erroring.
+pytest.importorskip("sklearn")
+pytest.importorskip("mlflow")
+
+from sklearn.ensemble import RandomForestClassifier  # noqa: E402
+
+import ml_analytics.model_manager as model_manager_module  # noqa: E402
 
 
 @pytest.fixture
