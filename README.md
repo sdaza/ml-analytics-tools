@@ -17,6 +17,7 @@ arguments.
 
 - `DataConnector`: run Redshift or Snowflake SQL, load SQL files, unload/load data through S3, and create Redshift tables from DataFrames.
 - `SFConnector`: read Snowflake through Spark and save results to Unity Catalog tables (Databricks). PySpark is imported lazily, so the rest of the package works without it.
+- `SparkTableManager`: source-agnostic Spark / Unity Catalog operations — save a Spark/pandas/polars DataFrame to a Delta table, convert pandas/polars to Spark, run Spark SQL, optimize, comment, drop, or read tables.
 - `S3Connector`: read, write, list, delete, and query S3 data with DuckDB.
 - `GSheet`: read, write, share, and export Google Sheets data.
 - `SlackConnector`: send messages, upload files, and manage simple Slack interactions.
@@ -200,6 +201,35 @@ variable → Databricks secret. See the
 [Snowflake Spark Connector](docs/SF_CONNECTOR_USAGE.md) guide for credential
 setup and all options.
 
+### Manage Unity Catalog Tables (`SparkTableManager`)
+
+When you already have a DataFrame (from any source) and just need Spark / Unity
+Catalog table operations, use `SparkTableManager`. It accepts Spark, pandas, or
+polars DataFrames and imports PySpark lazily, the same way `SFConnector` does.
+
+```python
+from ml_analytics import SparkTableManager
+
+tm = SparkTableManager(catalog="prod", schema="analytics")
+
+# run Spark SQL (Spark DataFrame, or pandas with return_pandas=True)
+df = tm.sql("SELECT * FROM prod.analytics.lessons WHERE country = 'US'")
+
+# save a Spark / pandas / polars DataFrame to a Unity Catalog Delta table
+tm.save_to_uc(df, table="lessons_us", comment="US lessons")
+
+# convert pandas/polars to Spark (optionally with an explicit schema)
+sdf = tm.to_spark(pandas_df, schema="user_id long, country string")
+
+# read back, optimize, or drop
+again = tm.read_table("lessons_us")
+tm.optimize_uc_table("lessons_us", zorder_by="country")
+tm.drop_table("lessons_us")
+```
+
+See the [Spark Table Manager](docs/SPARK_CONNECTOR_USAGE.md) guide for all
+options.
+
 ### Create A Redshift Table From A DataFrame
 
 ```python
@@ -300,6 +330,7 @@ slack.send_message(channel="#ml-alerts", text="Training finished")
 | [AWS Authentication](docs/AWS_AUTHENTICATION.md) | AWS SSO setup and Python helpers |
 | [CLI Commands](docs/CLI_COMMANDS.md) | Available console commands |
 | [Snowflake Spark Connector](docs/SF_CONNECTOR_USAGE.md) | `SFConnector` credential setup, reads, and writes on Spark/Databricks |
+| [Spark Table Manager](docs/SPARK_CONNECTOR_USAGE.md) | `SparkTableManager` — save DataFrames to Unity Catalog, convert pandas/polars, table maintenance |
 | [Google Sheets](docs/GSHEET_CONNECTOR_USAGE.md) | Sheets setup, sharing, exports, and examples |
 | [Slack](docs/SLACK_CONNECTOR_USAGE.md) | Slack token setup and message/file examples |
 | [Tunnel Manager](docs/TUNNEL_MANAGER.md) | SSH tunnel configuration and CLI usage |

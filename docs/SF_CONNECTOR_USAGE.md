@@ -172,7 +172,10 @@ sf.save_to_uc(df, table="prod.analytics.cr_subs")
 ```
 
 `save_to_uc` writes a managed Unity Catalog table — it does **not** write back to
-Snowflake.
+Snowflake. Under the hood `SFConnector` delegates this (and
+`optimize_uc_table` / `set_uc_table_comment`) to a
+[`SparkTableManager`](SPARK_CONNECTOR_USAGE.md), which you can also use directly
+for any Spark/pandas/polars DataFrame independent of Snowflake.
 
 On Databricks the active Spark session is detected and used automatically — you
 do not need to create or pass one.
