@@ -6,15 +6,16 @@ from unittest.mock import MagicMock, patch
 import pytest
 
 import ml_analytics.sf_connector as sf_module
+import ml_analytics.spark_connector as spark_module
 from ml_analytics import SFConnector
 
 
 @pytest.fixture(autouse=True)
 def _reset_spark_ctx():
     """Keep the module-level cached Spark session from leaking between tests."""
-    sf_module._spark_ctx = None
+    spark_module._spark_ctx = None
     yield
-    sf_module._spark_ctx = None
+    spark_module._spark_ctx = None
 
 SNOWFLAKE_ENV = [
     "DATABRICKS_SECRET_SCOPE",

@@ -8,8 +8,9 @@ from .aws_auth import ensure_aws_authenticated, ensure_aws_sso_login
 from .data_connector import DataConnector
 from .gsheet_connector import GSheet
 from .s3_connector import S3Connector
-from .sf_connector import SFConnector, get_spark
+from .sf_connector import SFConnector
 from .slack_connector import SlackConnector
+from .spark_connector import SparkTableManager, get_spark
 from .utils import (
     execute_sql_scripts,
     find_project_root,
@@ -82,4 +83,5 @@ __all__ = [
     "S3Connector",
     "SFConnector",
     "SlackConnector",
+    "SparkTableManager",
 ]

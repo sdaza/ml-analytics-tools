@@ -18,6 +18,7 @@ from .data_connector import (
     _load_private_key_pem_for_spark,
     _snowflake_secret_scope,
 )
+from .spark_connector import SparkTableManager, get_spark
 from .utils import (
     format_sql_ignoring_comments,
     get_logger,
@@ -26,70 +27,8 @@ from .utils import (
     resolve_sql_query_paths,
 )
 
-# Cached Spark session shared across SFConnector instances. Populated lazily by
-# get_spark(); never created at import time so the package stays importable
-# without PySpark.
-_spark_ctx = None
-
-
-def get_spark():
-    """
-    Get or create a cached Spark session that works both locally and on Databricks.
-
-    Neither PySpark nor Databricks Connect is a dependency of this package; both
-    are imported lazily so the rest of the package stays usable without them.
-
-    Resolution order:
-
-    1. Reuse an active :class:`SparkSession` if one exists. This is the normal
-       case inside a Databricks notebook/cluster, where ``spark`` is already
-       provided, so we attach to it rather than spinning up a new one.
-    2. Otherwise create a Databricks Connect session
-       (``DatabricksSession.builder.getOrCreate()``). This is the local-dev case:
-       it connects to a remote cluster/serverless using your Databricks config
-       (profile / env vars), so no notebook boilerplate is needed.
-    3. Otherwise fall back to a plain local ``SparkSession``.
-
-    This means a single ``spark = get_spark()`` line behaves correctly whether the
-    code runs locally via Databricks Connect or as a notebook on Databricks.
-    """
-    global _spark_ctx
-    if _spark_ctx is not None:
-        return _spark_ctx
-
-    # 1. Reuse an active session (the normal case inside a Databricks notebook/cluster).
-    try:
-        from pyspark.sql import SparkSession
-
-        active = SparkSession.getActiveSession()
-        if active is not None:
-            _spark_ctx = active
-            return _spark_ctx
-    except ImportError:
-        # PySpark itself isn't installed; Databricks Connect (below) ships its own.
-        pass
-
-    # 2. Try Databricks Connect (local dev against a remote cluster/serverless).
-    try:
-        from databricks.connect import DatabricksSession
-
-        _spark_ctx = DatabricksSession.builder.getOrCreate()
-        return _spark_ctx
-    except ImportError:
-        pass
-
-    # 3. Fall back to a plain local Spark session.
-    try:
-        from pyspark.sql import SparkSession
-    except ImportError as exc:
-        raise ImportError(
-            "SFConnector needs a Spark session but neither PySpark nor Databricks "
-            "Connect is available. Run it on a Spark runtime (e.g. Databricks) or "
-            "install one locally with `pip install databricks-connect`."
-        ) from exc
-
-    _spark_ctx = SparkSession.builder.appName("ml_analytics").getOrCreate()
-    return _spark_ctx
+# Re-exported for backward compatibility; the canonical home is spark_connector.
+__all__ = ["SFConnector", "get_spark"]
 
 
 def _snowflake_account_url(account: str) -> str:
@@ -171,6 +110,9 @@ class SFConnector:
         self.source_format = source_format
         self.extra_options = dict(extra_options or {})
         self._spark = spark
+        # Engine-agnostic Unity Catalog table operations are delegated here so the
+        # same logic backs SFConnector and a standalone SparkTableManager.
+        self._tables = SparkTableManager(spark=spark, logger=self._logger)
 
         self._secret_scope = _snowflake_secret_scope(secret_scope, user=user)
 
@@ -231,6 +173,8 @@ class SFConnector:
         if self._spark is not None:
             return self._spark
         self._spark = get_spark()
+        # Keep the delegated table manager pointed at the same session.
+        self._tables._spark = self._spark
         return self._spark
 
     def spark_options(self, include_private_key: bool = True) -> dict[str, str]:
@@ -590,84 +534,25 @@ class SFConnector:
 
         return results if return_all else last_df
 
-    @staticmethod
-    def _qualified_uc_name(table: str, schema: str = None, catalog: str = None) -> str:
-        """Build a Unity Catalog table identifier from its parts.
-
-        A ``table`` that already contains dots is treated as fully qualified and
-        returned as-is; otherwise ``catalog`` / ``schema`` are prepended when given.
-        """
-        if "." in table:
-            return table
-        parts = [part for part in (catalog, schema, table) if part]
-        return ".".join(parts)
-
-    @staticmethod
-    def _zorder_clause(zorder_by=None) -> str:
-        """Build the optional Delta ZORDER BY clause."""
-        if not zorder_by:
-            return ""
-        if isinstance(zorder_by, str):
-            columns = [column.strip() for column in zorder_by.split(",")]
-        else:
-            columns = [str(column).strip() for column in zorder_by]
-        columns = [column for column in columns if column]
-        if not columns:
-            return ""
-        return f" ZORDER BY ({', '.join(columns)})"
-
-    @staticmethod
-    def _sql_string_literal(value: str) -> str:
-        """Escape a value for use inside a single-quoted SQL string literal."""
-        return str(value).replace("'", "''")
+    # Engine-agnostic Unity Catalog helpers live on SparkTableManager. They are
+    # re-exposed here (as static references / thin delegators) so SFConnector's
+    # public API is unchanged for callers that read from Snowflake and persist to
+    # Unity Catalog in one place.
+    _qualified_uc_name = staticmethod(SparkTableManager._qualified_uc_name)
+    _zorder_clause = staticmethod(SparkTableManager._zorder_clause)
+    _sql_string_literal = staticmethod(SparkTableManager._sql_string_literal)
 
     def set_uc_table_comment(self, table: str, comment: str, schema: str = None, catalog: str = None, spark=None):
-        """
-        Set a Unity Catalog table comment using Databricks table properties.
-
-        Parameters
-        ----------
-        table
-            Table name. May be fully qualified.
-        comment
-            Comment text to store.
-        schema, catalog
-            Optional qualifiers when ``table`` is not fully qualified.
-        spark
-            Optional SparkSession to use. Defaults to this connector's Spark session.
-        """
-        full_name = self._qualified_uc_name(table, schema=schema, catalog=catalog)
-        spark = spark or self._get_spark()
-        escaped_comment = self._sql_string_literal(comment)
-        try:
-            spark.sql(f"ALTER TABLE {full_name} SET TBLPROPERTIES ('comment' = '{escaped_comment}')")
-        except Exception as e:
-            log_and_raise_error(self._logger, f"Error setting comment for Unity Catalog table '{full_name}': {e}")
-        self._logger.info(f"Comment set for Unity Catalog table '{full_name}'.")
+        """Set a Unity Catalog table comment. See :meth:`SparkTableManager.set_uc_table_comment`."""
+        return self._tables.set_uc_table_comment(
+            table, comment, schema=schema, catalog=catalog, spark=spark or self._get_spark()
+        )
 
     def optimize_uc_table(self, table: str, schema: str = None, catalog: str = None, zorder_by=None, spark=None):
-        """
-        Run Databricks Delta ``OPTIMIZE`` on a Unity Catalog table.
-
-        Parameters
-        ----------
-        table
-            Table name. May be fully qualified.
-        schema, catalog
-            Optional qualifiers when ``table`` is not fully qualified.
-        zorder_by
-            Optional column or columns for ``ZORDER BY``.
-        spark
-            Optional SparkSession to use. Defaults to this connector's Spark session.
-        """
-        full_name = self._qualified_uc_name(table, schema=schema, catalog=catalog)
-        spark = spark or self._get_spark()
-        optimize_sql = f"OPTIMIZE {full_name}{self._zorder_clause(zorder_by)}"
-        try:
-            spark.sql(optimize_sql)
-        except Exception as e:
-            log_and_raise_error(self._logger, f"Error optimizing Unity Catalog table '{full_name}': {e}")
-        self._logger.info(f"Table '{full_name}' optimized.")
+        """Run Delta ``OPTIMIZE`` on a Unity Catalog table. See :meth:`SparkTableManager.optimize_uc_table`."""
+        return self._tables.optimize_uc_table(
+            table, schema=schema, catalog=catalog, zorder_by=zorder_by, spark=spark or self._get_spark()
+        )
 
     def save_to_uc(
         self,
@@ -682,90 +567,27 @@ class SFConnector:
         comment: str = None,
         drop_existing: bool = True,
         overwrite_schema: bool = True,
+        spark_schema=None,
     ):
         """
         Write a Spark DataFrame to a Databricks Unity Catalog table.
 
-        Uses Spark's native ``df.write.saveAsTable(...)`` (a managed UC table),
-        not the Snowflake connector. By default, runs Delta ``OPTIMIZE`` after
-        the write.
-
-        Parameters
-        ----------
-        df : pyspark.sql.DataFrame
-            DataFrame to write.
-        table : str
-            Destination table name. May be fully qualified
-            (``catalog.schema.table``), in which case ``schema`` / ``catalog``
-            are ignored.
-        schema, catalog : str, optional
-            Unity Catalog schema and catalog to qualify ``table`` with.
-        mode : str, optional
-            Spark write mode: 'overwrite', 'append', 'ignore', or 'error'.
-            Defaults to 'overwrite'.
-        optimize : bool, optional
-            If True, run ``OPTIMIZE`` after saving. Defaults to True.
-        zorder_by : str or list[str], optional
-            Optional columns for Delta ``ZORDER BY`` during optimize.
-        merge_schema : bool, optional
-            If True, writes as Delta with ``mergeSchema=true`` (used for appends and
-            whenever the schema is not being overwritten). Defaults to True. Ignored on
-            an overwrite when ``overwrite_schema`` is True (the two are mutually
-            exclusive in Delta).
-        comment : str, optional
-            Optional table comment stored as a Unity Catalog table property.
-        drop_existing : bool, optional
-            If True, ``DROP TABLE IF EXISTS`` the destination before writing so the
-            table is fully recreated from this DataFrame (removed columns disappear,
-            and table properties / grants / history are reset). Defaults to True.
-            Set to False to preserve the existing table — required for ``mode='append'``,
-            which would otherwise drop the table on every call.
-        overwrite_schema : bool, optional
-            If True and ``mode='overwrite'``, writes with Delta ``overwriteSchema=true``
-            so the table schema is replaced (columns absent from this DataFrame are
-            dropped) rather than merged. Defaults to True. Has no effect on non-overwrite
-            modes.
-
-        Returns
-        -------
-        pyspark.sql.DataFrame
-            A DataFrame reading back from the saved Unity Catalog Delta table
-            (``spark.table(full_name)``), not the source DataFrame. Downstream actions
-            then scan the fast Delta table instead of re-running the original read.
+        Thin delegator to :meth:`SparkTableManager.save_to_uc`; see that method
+        for the full parameter and return-value documentation. Provided here so
+        callers can read from Snowflake and persist the result through a single
+        ``SFConnector`` instance.
         """
-        if not table:
-            log_and_raise_error(self._logger, "A destination table name is required.")
-
-        full_name = self._qualified_uc_name(table, schema=schema, catalog=catalog)
-        spark = getattr(df, "sparkSession", None) or self._spark
-
-        if drop_existing:
-            try:
-                spark.sql(f"DROP TABLE IF EXISTS {full_name}")
-            except Exception as e:
-                log_and_raise_error(self._logger, f"Error dropping Unity Catalog table '{full_name}': {e}")
-            self._logger.info(f"Dropped existing Unity Catalog table '{full_name}' before write.")
-
-        try:
-            writer = df.write.format("delta")
-            # overwriteSchema and mergeSchema are mutually exclusive in Delta. On an
-            # overwrite, replacing the schema (so removed columns are dropped) takes
-            # precedence; mergeSchema is used otherwise (e.g. evolving on append).
-            if mode == "overwrite" and overwrite_schema:
-                writer = writer.option("overwriteSchema", "true")
-            elif merge_schema:
-                writer = writer.option("mergeSchema", "true")
-            writer.mode(mode).saveAsTable(full_name)
-        except Exception as e:
-            log_and_raise_error(self._logger, f"Error writing to Unity Catalog table '{full_name}': {e}")
-        self._logger.info(f"Table '{full_name}' written to Unity Catalog (mode={mode}).")
-
-        if comment is not None:
-            self.set_uc_table_comment(full_name, comment, spark=spark)
-
-        if optimize:
-            self.optimize_uc_table(full_name, zorder_by=zorder_by, spark=spark)
-
-        # Return a DataFrame backed by the just-written Delta table so callers read
-        # from fast Unity Catalog storage rather than re-executing the Snowflake read.
-        return spark.table(full_name)
+        return self._tables.save_to_uc(
+            df,
+            table,
+            schema=schema,
+            catalog=catalog,
+            mode=mode,
+            optimize=optimize,
+            zorder_by=zorder_by,
+            merge_schema=merge_schema,
+            comment=comment,
+            drop_existing=drop_existing,
+            overwrite_schema=overwrite_schema,
+            spark_schema=spark_schema,
+        )
