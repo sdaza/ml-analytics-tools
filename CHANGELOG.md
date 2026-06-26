@@ -1,5 +1,17 @@
 # Changelog
 
+## [0.7.1](https://github.com/sdaza/ml-analytics-tools/compare/ml-analytics-tools-v0.7.0...ml-analytics-tools-v0.7.1) (2026-06-26)
+
+
+### Bug Fixes
+
+* refactor SFConnector to delegate table management to SparkTableManager and add spark_connector module ([73df3b7](https://github.com/sdaza/ml-analytics-tools/commit/73df3b71e3666fba5fb452d6b849b8a682e1fddb))
+
+
+### Documentation
+
+* add SparkTableManager documentation and usage examples ([e5205b3](https://github.com/sdaza/ml-analytics-tools/commit/e5205b310c821d2918cc9d28d9cc4c3a23e28cf1))
+
 ## [0.7.0](https://github.com/sdaza/ml-analytics-tools/compare/ml-analytics-tools-v0.6.0...ml-analytics-tools-v0.7.0) (2026-06-25)
 
 
