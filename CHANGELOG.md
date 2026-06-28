@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.7.2](https://github.com/sdaza/ml-analytics-tools/compare/ml-analytics-tools-v0.7.1...ml-analytics-tools-v0.7.2) (2026-06-28)
+
+
+### Bug Fixes
+
+* defer S3 connector initialization until required to avoid unnecessary credential refresh ([6a75817](https://github.com/sdaza/ml-analytics-tools/commit/6a75817cf1e07148dae6ebe3f220aa35cf15d88d))
+
 ## [0.7.1](https://github.com/sdaza/ml-analytics-tools/compare/ml-analytics-tools-v0.7.0...ml-analytics-tools-v0.7.1) (2026-06-26)
 
 
