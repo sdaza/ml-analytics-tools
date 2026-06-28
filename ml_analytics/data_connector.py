@@ -678,10 +678,8 @@ class DataConnector:
                 self.cursor = self.connection.cursor()
                 self._start_idle_timer()  # Start idle timer on new connection
 
-                # Initialize the default S3 connector only when a default bucket is configured.
-                if self._s3_bucket:
-                    self.s3 = self._get_s3_for_bucket(self._s3_bucket)
-
+                # Defer S3 connector initialization until an S3 operation is actually required.
+                # This avoids AWS credential refresh/SSO login when only the database connection is used.
             except Exception as e:
                 log_and_raise_error(self._logger, f"Failed to connect to {self.engine.title()}: {e}")
 

@@ -650,6 +650,23 @@ class TestThreadSafeConnect:
 
             assert mock_redshift.connect.call_count == 1
 
+    def test_connect_does_not_initialize_s3_when_default_bucket_configured(self, mock_credentials):
+        """connect() should not initialize S3 unless it's actually used."""
+        with patch("ml_analytics.data_connector.redshift_connector") as mock_redshift, patch(
+            "ml_analytics.s3_connector.boto3"
+        ) as mock_boto3:
+            mock_connection = MagicMock()
+            mock_connection.closed = False
+            mock_cursor = MagicMock()
+            mock_connection.cursor.return_value = mock_cursor
+            mock_redshift.connect.return_value = mock_connection
+
+            dc = DataConnector()
+            dc.connect()
+
+            assert dc.s3 is None
+            assert mock_boto3.Session.call_count == 0
+
 
 # === Tests for multi-statement SQL in unload_to_s3 ===
 
