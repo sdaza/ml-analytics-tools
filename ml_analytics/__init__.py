@@ -2,7 +2,9 @@
 ML Analytics Tools Package
 """
 
-from dotenv import load_dotenv
+import os
+
+from dotenv import dotenv_values, load_dotenv
 
 from .aws_auth import ensure_aws_authenticated, ensure_aws_sso_login
 from .data_connector import DataConnector
@@ -28,8 +30,18 @@ try:
     project_root = find_project_root(required=False)
     env_file = project_root / ".env" if project_root else None
     if env_file is not None and env_file.exists():
+        # load_dotenv(override=True) silently replaces real environment
+        # variables; log which names were overridden (never values) so a .env
+        # clobbering e.g. SNOWFLAKE_AUTHENTICATOR is diagnosable at a glance.
+        overridden = sorted(
+            name
+            for name, value in dotenv_values(env_file).items()
+            if value is not None and name in os.environ and os.environ[name] != value
+        )
         if load_dotenv(env_file, override=True):
             logger.info(".env file loaded successfully.")
+            if overridden:
+                logger.info(f".env overrode existing environment variables: {', '.join(overridden)}")
         else:
             logger.warning("Failed to load .env file.")
     else:
