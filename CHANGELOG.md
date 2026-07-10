@@ -1,5 +1,19 @@
 # Changelog
 
+## [0.8.0](https://github.com/sdaza/ml-analytics-tools/compare/ml-analytics-tools-v0.7.2...ml-analytics-tools-v0.8.0) (2026-07-10)
+
+
+### Features
+
+* named Snowflake connection profiles and authenticator precedence fix ([8d2f006](https://github.com/sdaza/ml-analytics-tools/commit/8d2f0060adcb7c7b745bc3f0d6fdfd03f30fe94f))
+
+
+### Bug Fixes
+
+* avoid slow Databricks secret-scope sweep during GSheet initialization ([a6ebad6](https://github.com/sdaza/ml-analytics-tools/commit/a6ebad65dc504ab95943cf23b05b3deff56155d3))
+* fast GSheet init, Snowflake connection profiles, authenticator precedence ([dc5ac49](https://github.com/sdaza/ml-analytics-tools/commit/dc5ac49465092a3bd39846038dd2b18d5893e91b))
+* log which environment variables a loaded .env overrides ([8c12fbe](https://github.com/sdaza/ml-analytics-tools/commit/8c12fbe6516f40ff9f18c01b652d56c10dab0920))
+
 ## [0.7.2](https://github.com/sdaza/ml-analytics-tools/compare/ml-analytics-tools-v0.7.1...ml-analytics-tools-v0.7.2) (2026-06-28)
 
 
