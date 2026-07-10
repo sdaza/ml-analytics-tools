@@ -533,3 +533,56 @@ class TestGetSqlFilesNamedPipeline:
 
         assert executed_order[0] == "DROP TABLE IF EXISTS beta_table"
         assert executed_order[1] == "DROP TABLE IF EXISTS alpha_table"
+
+
+class TestDatabricksCurrentUser:
+    """databricks_current_user resolution, including the databricks-sdk fallback."""
+
+    @pytest.fixture(autouse=True)
+    def _reset_caches(self, monkeypatch):
+        from ml_analytics import utils
+
+        monkeypatch.setattr(utils, "_SDK_CURRENT_USER", None)
+        monkeypatch.setattr(utils, "_SDK_CURRENT_USER_RESOLVED", False)
+        monkeypatch.setattr(utils, "_DBUTILS_RESOLVED", True)
+
+    def test_returns_none_without_dbutils(self, monkeypatch):
+        from ml_analytics import utils
+
+        monkeypatch.setattr(utils, "_DBUTILS", None)
+        assert utils.databricks_current_user() is None
+
+    def test_notebook_context_user_wins(self, monkeypatch):
+        from ml_analytics import utils
+
+        dbutils = MagicMock()
+        dbutils.notebook.entry_point.getDbutils.return_value.notebook.return_value.getContext.return_value.userName.return_value.get.return_value = "notebook.user@example.com"  # noqa: E501
+        monkeypatch.setattr(utils, "_DBUTILS", dbutils)
+
+        assert utils.databricks_current_user() == "notebook.user@example.com"
+
+    def test_falls_back_to_workspace_client_and_caches(self, monkeypatch):
+        import databricks.sdk
+
+        from ml_analytics import utils
+
+        # A dbutils without a notebook context (the remote databricks-sdk case).
+        monkeypatch.setattr(utils, "_DBUTILS", object())
+
+        mock_ws = MagicMock()
+        mock_ws.return_value.current_user.me.return_value.user_name = "sdk.user@example.com"
+        monkeypatch.setattr(databricks.sdk, "WorkspaceClient", mock_ws)
+
+        assert utils.databricks_current_user() == "sdk.user@example.com"
+        assert utils.databricks_current_user() == "sdk.user@example.com"
+        mock_ws.assert_called_once()
+
+    def test_workspace_client_failure_returns_none(self, monkeypatch):
+        import databricks.sdk
+
+        from ml_analytics import utils
+
+        monkeypatch.setattr(utils, "_DBUTILS", object())
+        monkeypatch.setattr(databricks.sdk, "WorkspaceClient", MagicMock(side_effect=RuntimeError("no config")))
+
+        assert utils.databricks_current_user() is None

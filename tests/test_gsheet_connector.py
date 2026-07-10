@@ -15,8 +15,32 @@ from ml_analytics.gsheet_connector import GSheet
 @pytest.fixture(autouse=True)
 def clear_oauth_env_vars(monkeypatch):
     """Clear OAuth env vars so service-account tests aren't disturbed by a loaded .env."""
-    for var in ("GOOGLE_OAUTH_CLIENT_ID", "GOOGLE_OAUTH_CLIENT_SECRET", "GOOGLE_CLOUD_PROJECT", "GSHEET_TOKEN_PATH"):
+    for var in (
+        "GOOGLE_OAUTH_CLIENT_ID",
+        "GOOGLE_OAUTH_CLIENT_SECRET",
+        "GOOGLE_CLOUD_PROJECT",
+        "GSHEET_TOKEN_PATH",
+        "GOOGLE_CREDENTIALS",
+        "GOOGLE_SERVICE_ACCOUNT_PATH",
+        "GOOGLE_APPLICATION_CREDENTIALS",
+    ):
         monkeypatch.delenv(var, raising=False)
+
+
+@pytest.fixture(autouse=True)
+def no_local_databricks(monkeypatch):
+    """
+    Keep unit tests hermetic: never resolve a dbutils handle.
+
+    On a dev machine with a configured databricks-sdk, ``utils._get_dbutils()``
+    would otherwise return a *remote* dbutils and these tests would make real
+    workspace API calls (listScopes, secrets.list/get). Tests that need a
+    dbutils set ``ml_analytics.utils._DBUTILS`` to a fake themselves.
+    """
+    monkeypatch.setattr("ml_analytics.utils._DBUTILS", None)
+    monkeypatch.setattr("ml_analytics.utils._DBUTILS_RESOLVED", True)
+    monkeypatch.setattr("ml_analytics.utils._SDK_CURRENT_USER", None)
+    monkeypatch.setattr("ml_analytics.utils._SDK_CURRENT_USER_RESOLVED", True)
 
 
 @pytest.fixture
@@ -252,6 +276,104 @@ class TestGSheetCredentialLoading:
             expected_key = "-----BEGIN PRIVATE KEY-----\nLINE1\nLINE2\n-----END PRIVATE KEY-----"
             assert assembled_creds["private_key"] == expected_key
             assert "\\n" not in assembled_creds["private_key"]
+
+
+class TestGSheetCredentialFastPaths:
+    """Env-based credentials must resolve without any secret-scope sweep."""
+
+    def test_google_credentials_env_used_before_scope_sweep(
+        self, sample_credentials_dict, mock_google_service_account, mock_google_api_services, monkeypatch
+    ):
+        monkeypatch.setenv("GOOGLE_CREDENTIALS", json.dumps(sample_credentials_dict))
+
+        with patch.object(GSheet, "_load_credentials_from_scopes") as mock_scopes:
+            _ = GSheet(scope="ml")
+
+        mock_scopes.assert_not_called()
+        call_args = mock_google_service_account.from_service_account_info.call_args
+        assert call_args[0][0] == sample_credentials_dict
+
+    def test_invalid_google_credentials_env_falls_through_to_scopes(
+        self, sample_credentials_dict, mock_google_service_account, mock_google_api_services, monkeypatch
+    ):
+        monkeypatch.setenv("GOOGLE_CREDENTIALS", "not-json{")
+
+        with patch.object(GSheet, "_load_credentials_from_scopes", return_value=sample_credentials_dict) as mock_scopes:
+            _ = GSheet(scope="ml")
+
+        mock_scopes.assert_called_once()
+
+    def test_google_application_credentials_path_used_before_scope_sweep(
+        self, sample_credentials_dict, mock_google_service_account, mock_google_api_services, monkeypatch, tmp_path
+    ):
+        credentials_file = tmp_path / "sa.json"
+        credentials_file.write_text(json.dumps(sample_credentials_dict))
+        monkeypatch.setenv("GOOGLE_APPLICATION_CREDENTIALS", str(credentials_file))
+
+        with patch.object(GSheet, "_load_credentials_from_scopes") as mock_scopes:
+            _ = GSheet(scope="ml")
+
+        mock_scopes.assert_not_called()
+        mock_google_service_account.from_service_account_file.assert_called_once()
+        assert mock_google_service_account.from_service_account_file.call_args[0][0] == str(credentials_file)
+
+
+class TestGSheetScopeSkipping:
+    """Scopes without Google secrets are skipped via secrets.list off-runtime."""
+
+    @staticmethod
+    def _fake_dbutils(scope_keys: dict[str, list[str]]):
+        class _Secret:
+            def __init__(self, key):
+                self.key = key
+
+        class _Secrets:
+            def list(self, scope):
+                return [_Secret(key) for key in scope_keys[scope]]
+
+        class _DbUtils:
+            secrets = _Secrets()
+
+        return _DbUtils()
+
+    def test_scopes_without_google_secrets_are_skipped(
+        self, sample_credentials_dict, mock_google_service_account, mock_google_api_services, monkeypatch
+    ):
+        monkeypatch.delenv("DATABRICKS_RUNTIME_VERSION", raising=False)
+        fake = self._fake_dbutils(
+            {
+                "ml": ["SLACK_TOKEN"],
+                "scope-a": ["SOME_OTHER_SECRET"],
+                "scope-b": ["GOOGLE_CREDENTIALS"],
+            }
+        )
+        monkeypatch.setattr("ml_analytics.utils._DBUTILS", fake)
+        monkeypatch.setattr("ml_analytics.gsheet_connector.databricks_current_user", lambda: None)
+        monkeypatch.setattr("ml_analytics.gsheet_connector.databricks_secret_scopes", lambda: ["scope-a", "scope-b"])
+
+        with patch("ml_analytics.gsheet_connector.get_credential_value") as mock_get_cred:
+            mock_get_cred.return_value = json.dumps(sample_credentials_dict)
+            gsheet = GSheet()
+
+        assert gsheet._scopes == ["ml", "scope-a", "scope-b"]
+        # 'ml' and 'scope-a' hold no Google secrets: no get() should ever be
+        # issued against them — only the single hit on 'scope-b'.
+        mock_get_cred.assert_called_once_with("GOOGLE_CREDENTIALS", scope="scope-b")
+
+    def test_scopes_are_not_skipped_on_databricks_runtime(
+        self, sample_credentials_dict, mock_google_service_account, mock_google_api_services, monkeypatch
+    ):
+        # On the runtime, credentials may live in /mnt/<scope> SecretProvider
+        # files invisible to secrets.list, so every scope must still be probed.
+        monkeypatch.setenv("DATABRICKS_RUNTIME_VERSION", "15.4")
+        fake = self._fake_dbutils({"ml": ["SLACK_TOKEN"]})
+        monkeypatch.setattr("ml_analytics.utils._DBUTILS", fake)
+
+        with patch("ml_analytics.gsheet_connector.get_credential_value") as mock_get_cred:
+            mock_get_cred.return_value = json.dumps(sample_credentials_dict)
+            _ = GSheet(scope="ml")
+
+        mock_get_cred.assert_called_once_with("GOOGLE_CREDENTIALS", scope="ml")
 
 
 class TestGSheetCredentialPriority:

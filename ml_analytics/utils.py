@@ -107,12 +107,20 @@ def _get_dbutils():
     return _DBUTILS
 
 
+_SDK_CURRENT_USER = None
+_SDK_CURRENT_USER_RESOLVED = False
+
+
 def databricks_current_user() -> str | None:
     """
     Return the current Databricks user's email, or None when unavailable.
 
-    Works in notebooks and jobs on the Databricks runtime; returns None
-    everywhere else (local / non-Spark) so callers can fall back gracefully.
+    Works in notebooks and jobs on the Databricks runtime. Off-runtime, when
+    ``dbutils`` resolves to the databricks-sdk's remote implementation (local
+    machine with a configured workspace), the notebook context doesn't exist,
+    so the workspace is asked directly who the caller is (one API call,
+    cached). Returns None everywhere else (local / non-Spark, no SDK config)
+    so callers can fall back gracefully.
     """
     dbutils = _get_dbutils()
     if dbutils is None:
@@ -122,9 +130,22 @@ def databricks_current_user() -> str | None:
         ctx = dbutils.notebook.entry_point.getDbutils().notebook().getContext()
         user = ctx.userName().get()
     except Exception:
-        return None
+        user = None
 
-    return user or None
+    if user:
+        return user
+
+    global _SDK_CURRENT_USER, _SDK_CURRENT_USER_RESOLVED
+    if _SDK_CURRENT_USER_RESOLVED:
+        return _SDK_CURRENT_USER
+    _SDK_CURRENT_USER_RESOLVED = True
+    try:
+        from databricks.sdk import WorkspaceClient
+
+        _SDK_CURRENT_USER = WorkspaceClient().current_user.me().user_name or None
+    except Exception:
+        _SDK_CURRENT_USER = None
+    return _SDK_CURRENT_USER
 
 
 def databricks_secret_scopes() -> list[str]:
