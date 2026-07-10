@@ -35,6 +35,7 @@ def _clear_snowflake_env(monkeypatch):
         "SNOWFLAKE_ACCESS_TOKEN",
         "SNOWFLAKE_ACCOUNT",
         "SNOWFLAKE_AUTHENTICATOR",
+        "SNOWFLAKE_CONNECTION_NAME",
         "SNOWFLAKE_DATABASE",
         "SNOWFLAKE_OAUTH_TOKEN",
         "SNOWFLAKE_PASSWORD",
@@ -185,6 +186,102 @@ def test_snowflake_oauth_token_params(monkeypatch):
     assert dc._db_params["authenticator"] == "oauth"
     assert dc._db_params["token"] == "oauth-token"
     assert "password" not in dc._db_params
+
+
+def test_snowflake_explicit_authenticator_wins_over_private_key(monkeypatch):
+    _clear_snowflake_env(monkeypatch)
+    monkeypatch.setenv("SNOWFLAKE_USER", "your.name@example.com")
+    monkeypatch.setenv("SNOWFLAKE_ACCOUNT", "example-account")
+    monkeypatch.setenv(
+        "SNOWFLAKE_PRIVATE_KEY", "-----BEGIN PRIVATE KEY-----\nabc\n-----END PRIVATE KEY-----"
+    )
+
+    dc = DataConnector(engine="snowflake", authenticator="externalbrowser")
+
+    assert dc._db_params["authenticator"] == "externalbrowser"
+    assert "private_key" not in dc._db_params
+
+
+def test_snowflake_explicit_authenticator_with_token(monkeypatch):
+    _clear_snowflake_env(monkeypatch)
+    monkeypatch.setenv("SNOWFLAKE_USER", "your.name@example.com")
+    monkeypatch.setenv("SNOWFLAKE_ACCOUNT", "example-account")
+    monkeypatch.setenv("SNOWFLAKE_TOKEN", "oauth-token")
+    monkeypatch.setenv("SNOWFLAKE_PASSWORD", "ignored-password")
+
+    dc = DataConnector(engine="snowflake", authenticator="oauth")
+
+    assert dc._db_params["authenticator"] == "oauth"
+    assert dc._db_params["token"] == "oauth-token"
+    assert "password" not in dc._db_params
+
+
+def test_snowflake_jwt_authenticator_without_key_passes_through(monkeypatch):
+    _clear_snowflake_env(monkeypatch)
+    monkeypatch.setenv("SNOWFLAKE_USER", "your.name@example.com")
+    monkeypatch.setenv("SNOWFLAKE_ACCOUNT", "example-account")
+    monkeypatch.setenv("SNOWFLAKE_AUTHENTICATOR", "snowflake_jwt")
+
+    dc = DataConnector(engine="snowflake")
+
+    assert dc._db_params["authenticator"] == "snowflake_jwt"
+    assert "private_key" not in dc._db_params
+
+
+def test_connection_name_forces_snowflake_and_ignores_env_discovery(monkeypatch):
+    _clear_snowflake_env(monkeypatch)
+    # Env discovery must NOT leak into the params when a named profile is used.
+    monkeypatch.setenv("SNOWFLAKE_ACCOUNT", "env-account-should-be-ignored")
+    monkeypatch.setenv("SNOWFLAKE_AUTHENTICATOR", "externalbrowser")
+
+    dc = DataConnector(connection_name="preply_entp", role="MY_ROLE", database="MY_DB")
+
+    assert dc.engine == "snowflake"
+    assert dc._snowflake_connection_name == "preply_entp"
+    assert dc._db_params == {"role": "MY_ROLE", "database": "MY_DB", "autocommit": True}
+
+
+def test_connection_name_passed_to_snowflake_connect(monkeypatch):
+    _clear_snowflake_env(monkeypatch)
+
+    dc = DataConnector(connection_name="preply_entp", role="MY_ROLE")
+    mock_sf = MagicMock()
+    try:
+        with patch.object(DataConnector, "_import_snowflake_connector", return_value=mock_sf):
+            dc.connect()
+        mock_sf.connect.assert_called_once_with(connection_name="preply_entp", role="MY_ROLE", autocommit=True)
+    finally:
+        dc.close_connection()
+
+
+def test_connection_name_from_env_var(monkeypatch):
+    _clear_snowflake_env(monkeypatch)
+    monkeypatch.setenv("SNOWFLAKE_CONNECTION_NAME", "env-profile")
+
+    dc = DataConnector()
+
+    assert dc.engine == "snowflake"
+    assert dc._snowflake_connection_name == "env-profile"
+    assert dc._db_params == {"autocommit": True}
+
+
+def test_connection_name_env_does_not_override_explicit_engine(monkeypatch, mock_credentials):
+    _clear_snowflake_env(monkeypatch)
+    monkeypatch.setenv("SNOWFLAKE_CONNECTION_NAME", "env-profile")
+
+    dc = DataConnector(engine="redshift")
+
+    assert dc.engine == "redshift"
+
+
+def test_from_profile_classmethod(monkeypatch):
+    _clear_snowflake_env(monkeypatch)
+
+    dc = DataConnector.from_profile("preply_entp", role="MY_ROLE")
+
+    assert dc.engine == "snowflake"
+    assert dc._snowflake_connection_name == "preply_entp"
+    assert dc._db_params == {"role": "MY_ROLE", "autocommit": True}
 
 
 def test_s3_and_db_operations(mock_s3, mock_db, mock_credentials):

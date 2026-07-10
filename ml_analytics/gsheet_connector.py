@@ -325,6 +325,28 @@ class GSheet:
             self._logger.debug(f"Could not assemble credentials from individual components: {e}")
             return None
 
+    # Secret keys that can hold Google credentials in a scope: the single JSON
+    # blob, or the first component used by _assemble_credentials_from_components.
+    _GOOGLE_SECRET_MARKERS = ("GOOGLE_CREDENTIALS", "GOOGLE_PROJECT_ID")
+
+    @staticmethod
+    def _scope_secret_keys(scope: str) -> set[str] | None:
+        """
+        Return the secret key names available in ``scope``, or None when unknown.
+
+        Used to skip scopes that can't possibly hold Google credentials without
+        paying one failed ``secrets.get`` round trip per candidate key.
+        """
+        from .utils import _get_dbutils
+
+        dbutils = _get_dbutils()
+        if dbutils is None:
+            return None
+        try:
+            return {secret.key for secret in dbutils.secrets.list(scope)}
+        except Exception:
+            return None
+
     def _load_credentials_from_scopes(self) -> dict | None:
         """
         Load Google service account credentials by trying each candidate scope.
@@ -334,8 +356,23 @@ class GSheet:
         looks for a single ``GOOGLE_CREDENTIALS`` JSON blob, then falls back to
         assembling the credentials from individual component secrets. Returns the
         first credentials dictionary found, or ``None`` if no scope yields any.
+
+        Outside the Databricks runtime, each scope's key list is checked first
+        (one API call) so scopes without Google credentials are skipped instead
+        of probed key by key — with a locally configured databricks-sdk every
+        probe is a remote HTTPS round trip. On Databricks the per-key lookups
+        are kept because credentials may also live in SecretProvider mount
+        files (``/mnt/<scope>/...``) that ``secrets.list`` can't see.
         """
+        on_databricks_runtime = os.environ.get("DATABRICKS_RUNTIME_VERSION") is not None
         for scope in self._scopes:
+            if not on_databricks_runtime:
+                available_keys = self._scope_secret_keys(scope)
+                if available_keys is not None and not any(
+                    marker in available_keys for marker in self._GOOGLE_SECRET_MARKERS
+                ):
+                    self._logger.debug(f"Scope '{scope}' has no Google credential secrets; skipping")
+                    continue
             try:
                 credentials_str = get_credential_value("GOOGLE_CREDENTIALS", scope=scope)
                 self._logger.debug(f"Using GOOGLE_CREDENTIALS from scope '{scope}'")
@@ -369,10 +406,17 @@ class GSheet:
         """
         # Try to auto-load from default location if no credentials provided
         if credentials_path is None and credentials_json is None:
-            # Try each candidate secret scope in order (e.g. the Databricks
-            # personal scope first, then "ml"). Returns the first scope that
-            # yields a GOOGLE_CREDENTIALS JSON or assembled component secrets.
-            credentials_json = self._load_credentials_from_scopes()
+            # Environment-based sources first: they resolve without any network
+            # call, whereas the secret-scope sweep below can mean dozens of
+            # Databricks API round trips when running locally with a configured
+            # databricks-sdk (remote dbutils).
+            env_credentials = os.environ.get("GOOGLE_CREDENTIALS")
+            if env_credentials:
+                try:
+                    credentials_json = json.loads(env_credentials)
+                    self._logger.debug("Using GOOGLE_CREDENTIALS from environment")
+                except json.JSONDecodeError as e:
+                    self._logger.warning(f"GOOGLE_CREDENTIALS env var is not valid JSON; ignoring: {e}")
 
             if credentials_json is None:
                 # Service-account file pointed to by an environment variable.
@@ -388,9 +432,13 @@ class GSheet:
                         self._logger.debug(f"Using credentials file from environment: {candidate}")
                         credentials_path = candidate
                     else:
-                        self._logger.warning(
-                            f"Credentials path from environment does not exist: {candidate}"
-                        )
+                        self._logger.warning(f"Credentials path from environment does not exist: {candidate}")
+
+            if credentials_path is None and credentials_json is None:
+                # Try each candidate secret scope in order (e.g. the Databricks
+                # personal scope first, then "ml"). Returns the first scope that
+                # yields a GOOGLE_CREDENTIALS JSON or assembled component secrets.
+                credentials_json = self._load_credentials_from_scopes()
 
             if credentials_path is None and credentials_json is None:
                 # OAuth fallback: only when OAuth env vars set and no SA creds found.

@@ -23,11 +23,23 @@ You can also pass `credentials_path="gsheet_credentials.json"` or
 
 The connector checks credentials in this order:
 
-1. `GOOGLE_CREDENTIALS`
-2. Mounted secret at `/mnt/<scope>/GOOGLE_CREDENTIALS`, default scope `ml`
-3. Individual credential variables such as `GOOGLE_PROJECT_ID` and `GOOGLE_CLIENT_EMAIL`
+1. `GOOGLE_CREDENTIALS` environment variable (full service-account JSON)
+2. Credentials file pointed to by `GOOGLE_SERVICE_ACCOUNT_PATH` or
+   `GOOGLE_APPLICATION_CREDENTIALS`
+3. Databricks secret scopes / mounted secrets (`GOOGLE_CREDENTIALS`, then
+   individual variables such as `GOOGLE_PROJECT_ID` and `GOOGLE_CLIENT_EMAIL`),
+   trying the personal `user-<email>` scope first, then `ml`, then any other
+   workspace scope
 4. `gsheet_credentials.json`
 5. Auto-discovered service account JSON files in the project directories
+
+Environment-based sources (1-2) resolve without any network call. The scope
+sweep (3) also runs locally when the `databricks-sdk` is configured (secrets
+are then fetched from the workspace over HTTPS); off-runtime, scopes that hold
+no Google secrets are skipped via `secrets.list` so the sweep stays fast. Pass
+`GSheet(scope="user-your.name@example.com")` to probe a single known scope, or
+set `GOOGLE_CREDENTIALS` locally to skip the sweep entirely — both make
+initialization near-instant.
 
 ## Basic Usage
 
