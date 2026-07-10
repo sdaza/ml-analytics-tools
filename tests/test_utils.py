@@ -561,9 +561,26 @@ class TestDatabricksCurrentUser:
 
         assert utils.databricks_current_user() == "notebook.user@example.com"
 
-    def test_falls_back_to_workspace_client_and_caches(self, monkeypatch):
-        import databricks.sdk
+    @staticmethod
+    def _install_fake_sdk(monkeypatch, workspace_client):
+        """
+        Register a fake ``databricks.sdk`` module exposing ``workspace_client``.
 
+        databricks-sdk is not a dependency of this package (the fallback import
+        is best-effort), so the real module may be absent — e.g. in CI. Faking
+        it in sys.modules keeps these tests runnable everywhere.
+        """
+        import sys
+        import types
+
+        sdk_module = types.ModuleType("databricks.sdk")
+        sdk_module.WorkspaceClient = workspace_client
+        package_module = types.ModuleType("databricks")
+        package_module.sdk = sdk_module
+        monkeypatch.setitem(sys.modules, "databricks", package_module)
+        monkeypatch.setitem(sys.modules, "databricks.sdk", sdk_module)
+
+    def test_falls_back_to_workspace_client_and_caches(self, monkeypatch):
         from ml_analytics import utils
 
         # A dbutils without a notebook context (the remote databricks-sdk case).
@@ -571,18 +588,29 @@ class TestDatabricksCurrentUser:
 
         mock_ws = MagicMock()
         mock_ws.return_value.current_user.me.return_value.user_name = "sdk.user@example.com"
-        monkeypatch.setattr(databricks.sdk, "WorkspaceClient", mock_ws)
+        self._install_fake_sdk(monkeypatch, mock_ws)
 
         assert utils.databricks_current_user() == "sdk.user@example.com"
         assert utils.databricks_current_user() == "sdk.user@example.com"
         mock_ws.assert_called_once()
 
     def test_workspace_client_failure_returns_none(self, monkeypatch):
-        import databricks.sdk
+        from ml_analytics import utils
+
+        monkeypatch.setattr(utils, "_DBUTILS", object())
+        self._install_fake_sdk(monkeypatch, MagicMock(side_effect=RuntimeError("no config")))
+
+        assert utils.databricks_current_user() is None
+
+    def test_missing_sdk_returns_none(self, monkeypatch):
+        import sys
 
         from ml_analytics import utils
 
         monkeypatch.setattr(utils, "_DBUTILS", object())
-        monkeypatch.setattr(databricks.sdk, "WorkspaceClient", MagicMock(side_effect=RuntimeError("no config")))
+        # Simulate databricks-sdk not being installed at all (e.g. CI):
+        # a None entry in sys.modules makes the import raise ImportError.
+        monkeypatch.setitem(sys.modules, "databricks", None)
+        monkeypatch.setitem(sys.modules, "databricks.sdk", None)
 
         assert utils.databricks_current_user() is None
