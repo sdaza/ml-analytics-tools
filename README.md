@@ -67,6 +67,9 @@ SNOWFLAKE_SCHEMA=PUBLIC
 SNOWFLAKE_ROLE=SNOWFLAKE_STND_DATA
 SNOWFLAKE_AUTHENTICATOR=externalbrowser
 
+# Or select a named profile from ~/.snowflake/connections.toml
+SNOWFLAKE_CONNECTION_NAME=preply_entp
+
 # Browser-free Snowflake auth for local or Databricks jobs
 SNOWFLAKE_PRIVATE_KEY_PATH=~/.snowflake/rsa_key.p8
 SNOWFLAKE_PRIVATE_KEY_PASSPHRASE=secret
@@ -132,7 +135,28 @@ dc = DataConnector(engine="snowflake")
 df = dc.sql("SELECT 1 AS col_1")
 ```
 
+#### Named connection profiles (`connection_name`)
+
+Instead of `SNOWFLAKE_*` env vars, you can use a named profile from Snowflake's
+standard `~/.snowflake/connections.toml` / `config.toml`. The engine is then
+implicitly `snowflake`, profile parsing is delegated to the Snowflake connector,
+and any constructor args act as explicit overrides on top of the profile:
+
+```python
+dc = DataConnector(connection_name="preply_entp", role="SNOWFLAKE_ENTP_ANALYST_PII")
+# equivalent:
+dc = DataConnector.from_profile("preply_entp", role="SNOWFLAKE_ENTP_ANALYST_PII")
+```
+
+You can also select the profile via `SNOWFLAKE_CONNECTION_NAME=preply_entp` in
+the environment. When a profile is used, `SNOWFLAKE_*` env vars and Databricks
+secrets are NOT consulted, so profiles from other accounts can't be clobbered
+by stale environment settings.
+
 For local interactive work, `SNOWFLAKE_AUTHENTICATOR=externalbrowser` is supported.
+An explicitly requested authenticator always wins: setting `externalbrowser`
+uses browser SSO even if a `SNOWFLAKE_PRIVATE_KEY`/`SNOWFLAKE_PRIVATE_KEY_PATH`
+happens to be discoverable in the environment or a secret scope.
 SSO tokens are cached in the OS keychain, so the browser login only happens once
 per token lifetime. (Note: `externalbrowser` works with `DataConnector` only;
 `SFConnector` rejects it, since Spark jobs block on the interactive browser SSO.)

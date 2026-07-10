@@ -258,6 +258,7 @@ class DataConnector:
         private_key_path=None,
         private_key_passphrase=None,
         secret_scope=None,
+        connection_name=None,
     ):
         """
         Initialize a DataConnector instance.
@@ -267,19 +268,49 @@ class DataConnector:
         Pass ``engine="snowflake"`` or set ``ML_ANALYTICS_DB_ENGINE=snowflake``
         to use Snowflake connection settings from ``SNOWFLAKE_*`` environment variables.
 
+        Pass ``connection_name`` (or set ``SNOWFLAKE_CONNECTION_NAME``) to use a
+        named profile from Snowflake's own ``~/.snowflake/connections.toml`` /
+        ``config.toml`` instead of the ``SNOWFLAKE_*`` env/secret discovery. The
+        engine is then implicitly ``snowflake`` and any other constructor args
+        (``role=``, ``database=``, ...) act as explicit overrides on top of the
+        profile.
+
         Both ``engine`` and ``user`` can be omitted when running on Databricks:
         ``engine`` falls back to an ``ML_ANALYTICS_DB_ENGINE`` secret (after env
         vars), and the Snowflake ``user`` falls back to the ``SNOWFLAKE_USER`` /
         ``snowflake_user`` secret and finally to the current notebook user's email.
         """
         self._logger = get_logger("Data Connector")
+        self._snowflake_connection_name = _clean_env_value(connection_name) or _clean_env_value(
+            os.getenv("SNOWFLAKE_CONNECTION_NAME")
+        )
+        if self._snowflake_connection_name and engine is None:
+            engine = "snowflake"
         self.engine = self._resolve_engine(engine)
         self._snowflake_private_key = private_key
         self._snowflake_private_key_path = private_key_path
         self._snowflake_private_key_passphrase = private_key_passphrase
         self._snowflake_secret_scope = _snowflake_secret_scope(secret_scope, user=user)
 
-        if self.engine == "snowflake":
+        if self.engine == "snowflake" and self._snowflake_connection_name:
+            # Named profile: the Snowflake connector reads connections.toml /
+            # config.toml itself; only explicit constructor args are layered on
+            # top, so unrelated SNOWFLAKE_* env vars can't clobber the profile.
+            self._db_params = self._build_snowflake_profile_overrides(
+                database=database,
+                user=user,
+                password=password,
+                account=account,
+                warehouse=warehouse,
+                schema=schema,
+                role=role,
+                authenticator=authenticator,
+                token=token,
+                private_key=private_key,
+                private_key_path=private_key_path,
+                private_key_passphrase=private_key_passphrase,
+            )
+        elif self.engine == "snowflake":
             self._db_params = self._build_snowflake_params(
                 database=database,
                 user=user,
@@ -434,7 +465,19 @@ class DataConnector:
             "autocommit": True,
         }
 
-        if private_key or private_key_path:
+        # An explicitly requested authenticator (arg, env var, or secret) always
+        # wins over a discovered private key: asking for e.g. externalbrowser
+        # while a SNOWFLAKE_PRIVATE_KEY happens to be set must not silently
+        # switch the connection to key-pair auth.
+        explicit_non_jwt_auth = resolved_authenticator and resolved_authenticator.upper() != "SNOWFLAKE_JWT"
+        if explicit_non_jwt_auth:
+            params["authenticator"] = resolved_authenticator
+            if token:
+                params["token"] = token
+                params.pop("password", None)
+            elif resolved_authenticator.lower() == "externalbrowser":
+                params.pop("password", None)
+        elif private_key or private_key_path:
             params["authenticator"] = "SNOWFLAKE_JWT"
             params.pop("password", None)
             params["private_key"] = _load_private_key_der(
@@ -443,12 +486,69 @@ class DataConnector:
                 passphrase=private_key_passphrase,
             )
         elif token:
-            params["authenticator"] = resolved_authenticator or "oauth"
+            params["authenticator"] = "oauth"
             params["token"] = token
             params.pop("password", None)
-        else:
+        elif resolved_authenticator:
+            # SNOWFLAKE_JWT requested without key material: pass it through and
+            # let the connector report the missing key instead of silently
+            # falling back to password auth.
             params["authenticator"] = resolved_authenticator
 
+        return {key: value for key, value in params.items() if _clean_env_value(value) is not None}
+
+    @classmethod
+    def from_profile(cls, connection_name: str, **kwargs) -> "DataConnector":
+        """Create a Snowflake DataConnector from a named connections.toml profile."""
+        return cls(engine="snowflake", connection_name=connection_name, **kwargs)
+
+    @staticmethod
+    def _build_snowflake_profile_overrides(
+        *,
+        database=None,
+        user=None,
+        password=None,
+        account=None,
+        warehouse=None,
+        schema=None,
+        role=None,
+        authenticator=None,
+        token=None,
+        private_key=None,
+        private_key_path=None,
+        private_key_passphrase=None,
+    ) -> dict:
+        """
+        Build the explicit overrides passed alongside ``connection_name``.
+
+        Unlike ``_build_snowflake_params`` this deliberately does NOT consult
+        ``SNOWFLAKE_*`` env vars or Databricks secrets: the named profile in
+        connections.toml is the source of truth and only arguments the caller
+        actually passed are layered on top of it.
+        """
+        params = {
+            "user": user,
+            "password": password,
+            "account": account,
+            "warehouse": warehouse,
+            "database": database,
+            "schema": schema,
+            "role": role,
+            "authenticator": authenticator,
+            "autocommit": True,
+        }
+        if private_key or private_key_path:
+            params["authenticator"] = authenticator or "SNOWFLAKE_JWT"
+            params.pop("password", None)
+            params["private_key"] = _load_private_key_der(
+                private_key=private_key,
+                private_key_path=private_key_path,
+                passphrase=private_key_passphrase,
+            )
+        elif token:
+            params["authenticator"] = authenticator or "oauth"
+            params["token"] = token
+            params.pop("password", None)
         return {key: value for key, value in params.items() if _clean_env_value(value) is not None}
 
     @staticmethod
@@ -671,7 +771,22 @@ class DataConnector:
             try:
                 if self.engine == "snowflake":
                     snowflake_connector = self._import_snowflake_connector()
-                    self.connection = snowflake_connector.connect(**self._db_params)
+                    self._logger.info(
+                        "Connecting to Snowflake (connection_name=%s, account=%s, user=%s, "
+                        "authenticator=%s, role=%s, database=%s)",
+                        self._snowflake_connection_name,
+                        self._db_params.get("account"),
+                        self._db_params.get("user"),
+                        self._db_params.get("authenticator", "snowflake (password)"),
+                        self._db_params.get("role"),
+                        self._db_params.get("database"),
+                    )
+                    if self._snowflake_connection_name:
+                        self.connection = snowflake_connector.connect(
+                            connection_name=self._snowflake_connection_name, **self._db_params
+                        )
+                    else:
+                        self.connection = snowflake_connector.connect(**self._db_params)
                 else:
                     self.connection = redshift_connector.connect(**self._db_params)
                     self.connection.autocommit = True
