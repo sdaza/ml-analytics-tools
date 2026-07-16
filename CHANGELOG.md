@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.8.1](https://github.com/sdaza/ml-analytics-tools/compare/ml-analytics-tools-v0.8.0...ml-analytics-tools-v0.8.1) (2026-07-16)
+
+
+### Bug Fixes
+
+* add display and show utility functions for enhanced output handling ([423994a](https://github.com/sdaza/ml-analytics-tools/commit/423994a794c6895cc21a723c6b250c96c3afadc3))
+
 ## [0.8.0](https://github.com/sdaza/ml-analytics-tools/compare/ml-analytics-tools-v0.7.2...ml-analytics-tools-v0.8.0) (2026-07-10)
 
 
