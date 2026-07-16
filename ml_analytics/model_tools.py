@@ -22,7 +22,7 @@ from sklearn.metrics import (
 )
 from sklearn.model_selection import GroupKFold, StratifiedGroupKFold, train_test_split
 
-from ml_analytics.utils import get_logger, log_and_raise_error
+from ml_analytics.utils import get_logger, log_and_raise_error, show
 
 logger = get_logger("modeling-tools")
 
@@ -744,7 +744,7 @@ def catboost_feature_selection(
             plt.ylabel("Loss")
             plt.legend()
             plt.grid()
-            plt.show()
+            show()
 
             summary = model.select_features(
                 train_pool,
@@ -878,7 +878,7 @@ def plot_score_bins(
         plt.savefig(save_path)
 
     if show_plot:
-        plt.show()
+        show()
     else:
         plt.close()
 
@@ -985,6 +985,6 @@ def plot_trend(
         print(f"Plot saved to {save_path}")
 
     if show_plot:
-        plt.show()
+        show()
     else:
         plt.close()  # Close the plot if not showing to free memory

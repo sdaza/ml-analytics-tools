@@ -614,3 +614,102 @@ class TestDatabricksCurrentUser:
         monkeypatch.setitem(sys.modules, "databricks.sdk", None)
 
         assert utils.databricks_current_user() is None
+
+
+class TestDisplay:
+    def test_uses_runtime_display_when_present(self, monkeypatch):
+        from ml_analytics import utils
+
+        calls = []
+
+        def fake_display(obj):
+            calls.append(obj)
+            return "shown"
+
+        monkeypatch.setattr(utils, "_resolve_runtime_display", lambda: fake_display)
+        assert utils.display({"a": 1}) == "shown"
+        assert calls == [{"a": 1}]
+
+    def test_spark_like_show_fallback(self, monkeypatch):
+        from ml_analytics import utils
+
+        monkeypatch.setattr(utils, "_resolve_runtime_display", lambda: None)
+        obj = MagicMock()
+        obj.show = MagicMock(return_value=None)
+        # MagicMock has toPandas by default via attribute access — remove it
+        del obj.toPandas
+
+        utils.display(obj, n=10)
+        obj.show.assert_called_once_with(10)
+
+    def test_topandas_fallback(self, monkeypatch, capsys):
+        from ml_analytics import utils
+
+        monkeypatch.setattr(utils, "_resolve_runtime_display", lambda: None)
+        obj = MagicMock(spec=["limit", "toPandas"])
+        limited = MagicMock()
+        limited.toPandas.return_value = "preview"
+        obj.limit.return_value = limited
+
+        utils.display(obj, n=5)
+        obj.limit.assert_called_once_with(5)
+        assert "preview" in capsys.readouterr().out
+
+    def test_print_fallback(self, monkeypatch, capsys):
+        from ml_analytics import utils
+
+        monkeypatch.setattr(utils, "_resolve_runtime_display", lambda: None)
+        utils.display("hello")
+        assert "hello" in capsys.readouterr().out
+
+    def test_resolve_skips_own_display(self, monkeypatch):
+        """Importing our display into builtins must not recurse."""
+        import builtins
+        import sys
+
+        from ml_analytics import utils
+
+        monkeypatch.setattr(builtins, "display", utils.display, raising=False)
+        monkeypatch.setitem(sys.modules, "databricks", None)
+        monkeypatch.setitem(sys.modules, "databricks.sdk", None)
+        monkeypatch.setitem(sys.modules, "databricks.sdk.runtime", None)
+        import __main__
+
+        monkeypatch.setattr(__main__, "display", utils.display, raising=False)
+        monkeypatch.setitem(sys.modules, "IPython", None)
+
+        assert utils._resolve_runtime_display() is None
+
+
+class TestShow:
+    def test_closes_under_agg(self, monkeypatch):
+        import sys
+        import types
+
+        from ml_analytics import utils
+
+        mock_plt = MagicMock()
+        mock_matplotlib = types.ModuleType("matplotlib")
+        mock_matplotlib.get_backend = MagicMock(return_value="Agg")
+        monkeypatch.setitem(sys.modules, "matplotlib", mock_matplotlib)
+        monkeypatch.setitem(sys.modules, "matplotlib.pyplot", mock_plt)
+
+        utils.show()
+        mock_plt.close.assert_called_once()
+        mock_plt.show.assert_not_called()
+
+    def test_shows_on_interactive_backend(self, monkeypatch):
+        import sys
+        import types
+
+        from ml_analytics import utils
+
+        mock_plt = MagicMock()
+        mock_matplotlib = types.ModuleType("matplotlib")
+        mock_matplotlib.get_backend = MagicMock(return_value="MacOSX")
+        monkeypatch.setitem(sys.modules, "matplotlib", mock_matplotlib)
+        monkeypatch.setitem(sys.modules, "matplotlib.pyplot", mock_plt)
+
+        utils.show()
+        mock_plt.show.assert_called_once()
+        mock_plt.close.assert_not_called()

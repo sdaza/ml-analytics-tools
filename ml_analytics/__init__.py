@@ -14,6 +14,7 @@ from .sf_connector import SFConnector
 from .slack_connector import SlackConnector
 from .spark_connector import SparkTableManager, get_spark
 from .utils import (
+    display,
     execute_sql_scripts,
     find_project_root,
     get_credential_value,
@@ -22,6 +23,7 @@ from .utils import (
     load_sql_query,
     log_and_raise_error,
     resolve_sql_query_paths,
+    show,
 )
 
 # Automatically load .env file when the package is imported
@@ -79,6 +81,7 @@ def __getattr__(name):
 
 __all__ = [
     "DataConnector",
+    "display",
     "ensure_aws_authenticated",
     "ensure_aws_sso_login",
     "execute_sql_scripts",
@@ -94,6 +97,7 @@ __all__ = [
     "resolve_sql_query_paths",
     "S3Connector",
     "SFConnector",
+    "show",
     "SlackConnector",
     "SparkTableManager",
 ]

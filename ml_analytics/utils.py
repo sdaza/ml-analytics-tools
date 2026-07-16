@@ -107,6 +107,104 @@ def _get_dbutils():
     return _DBUTILS
 
 
+def _resolve_runtime_display():
+    """
+    Return the Databricks / notebook ``display`` builtin if one is available.
+
+    Skips any candidate whose ``__module__`` is this package so that
+    ``from ml_analytics import display`` never recurses into itself.
+    """
+    try:
+        import builtins
+
+        candidate = getattr(builtins, "display", None)
+        if candidate is not None and getattr(candidate, "__module__", None) != __name__:
+            return candidate
+    except Exception:
+        pass
+
+    try:
+        import __main__
+
+        candidate = getattr(__main__, "display", None)
+        if candidate is not None and getattr(candidate, "__module__", None) != __name__:
+            return candidate
+    except Exception:
+        pass
+
+    try:
+        from databricks.sdk.runtime import display as db_display
+
+        if getattr(db_display, "__module__", None) != __name__:
+            return db_display
+    except Exception:
+        pass
+
+    try:
+        import IPython
+
+        ip = IPython.get_ipython()
+        if ip is not None:
+            candidate = ip.user_ns.get("display")
+            if candidate is not None and getattr(candidate, "__module__", None) != __name__:
+                return candidate
+    except Exception:
+        pass
+
+    return None
+
+
+def display(obj, n: int = 20):
+    """
+    Show ``obj`` the way Databricks ``display`` would, or a local fallback.
+
+    On Databricks (or any environment that injects a notebook ``display``),
+    that builtin is used. Elsewhere:
+
+    - Spark-like objects with ``.show`` → ``obj.show(n)``
+    - Spark DataFrames with ``toPandas`` → print a limited pandas preview
+    - anything else → ``print(obj)``
+
+    Intended for scripts that run both as ``uv run file.py`` and in a
+    Databricks notebook::
+
+        from ml_analytics import display
+        display(df)
+    """
+    runtime_display = _resolve_runtime_display()
+    if runtime_display is not None:
+        return runtime_display(obj)
+
+    if hasattr(obj, "show") and callable(obj.show):
+        return obj.show(n)
+    if hasattr(obj, "toPandas") and hasattr(obj, "limit"):
+        print(obj.limit(n).toPandas())
+        return None
+    print(obj)
+    return None
+
+
+def show():
+    """
+    Show the current matplotlib figure, or close it when headless.
+
+    Calls ``plt.show()`` on interactive backends. Under Agg (typical for
+    ``uv run``, CI, and non-interactive jobs) ``plt.show()`` only warns, so
+    the figure is closed instead::
+
+        from ml_analytics import show
+        plt.plot(...)
+        show()
+    """
+    import matplotlib
+    import matplotlib.pyplot as plt
+
+    if matplotlib.get_backend().lower() == "agg":
+        plt.close()
+    else:
+        plt.show()
+
+
 _SDK_CURRENT_USER = None
 _SDK_CURRENT_USER_RESOLVED = False
 
