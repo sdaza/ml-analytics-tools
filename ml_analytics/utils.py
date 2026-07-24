@@ -58,10 +58,11 @@ def _get_dbutils():
     Return a Databricks ``dbutils`` handle if running on Databricks, else None.
 
     Resolved lazily and cached. Imposes no hard dependency on Databricks: tries
-    ``databricks.sdk.runtime`` (preinstalled on the Databricks runtime, works in
-    both notebooks and jobs), then falls back to a notebook-injected ``dbutils``
-    global. Returns None anywhere else (e.g. local or non-Spark environments),
-    so callers can simply skip the secret-scope lookup.
+    injected ``dbutils`` globals first, then ``databricks.sdk.runtime`` only when
+    ``DATABRICKS_RUNTIME_VERSION`` is set (preinstalled on the Databricks
+    runtime; importing it off-cluster can hang under ``uv run``). Returns None
+    anywhere else (e.g. local or non-Spark environments), so callers can simply
+    skip the secret-scope lookup.
     """
     global _DBUTILS, _DBUTILS_RESOLVED
     if _DBUTILS_RESOLVED:
@@ -86,13 +87,15 @@ def _get_dbutils():
     except Exception:
         pass
 
-    try:
-        from databricks.sdk.runtime import dbutils
+    # Gate: do not import databricks.sdk.runtime off-cluster (can hang under uv run)
+    if os.environ.get("DATABRICKS_RUNTIME_VERSION"):
+        try:
+            from databricks.sdk.runtime import dbutils
 
-        _DBUTILS = dbutils
-        return _DBUTILS
-    except Exception:
-        pass
+            _DBUTILS = dbutils
+            return _DBUTILS
+        except Exception:
+            pass
 
     # Fallback: dbutils injected into the notebook's interactive namespace.
     try:
@@ -113,6 +116,9 @@ def _resolve_runtime_display():
 
     Skips any candidate whose ``__module__`` is this package so that
     ``from ml_analytics import display`` never recurses into itself.
+
+    Only imports ``databricks.sdk.runtime`` when ``DATABRICKS_RUNTIME_VERSION``
+    is set; that import can hang off-cluster under ``uv run``.
     """
     try:
         import builtins
@@ -132,13 +138,15 @@ def _resolve_runtime_display():
     except Exception:
         pass
 
-    try:
-        from databricks.sdk.runtime import display as db_display
+    # Gate: do not import databricks.sdk.runtime off-cluster (can hang under uv run)
+    if os.environ.get("DATABRICKS_RUNTIME_VERSION"):
+        try:
+            from databricks.sdk.runtime import display as db_display
 
-        if getattr(db_display, "__module__", None) != __name__:
-            return db_display
-    except Exception:
-        pass
+            if getattr(db_display, "__module__", None) != __name__:
+                return db_display
+        except Exception:
+            pass
 
     try:
         import IPython
