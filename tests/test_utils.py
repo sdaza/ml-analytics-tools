@@ -680,6 +680,132 @@ class TestDisplay:
 
         assert utils._resolve_runtime_display() is None
 
+    def test_resolve_skips_sdk_runtime_off_cluster(self, monkeypatch):
+        """Off-cluster must not import databricks.sdk.runtime (can hang under uv run)."""
+        import builtins
+        import sys
+
+        from ml_analytics import utils
+
+        monkeypatch.delenv("DATABRICKS_RUNTIME_VERSION", raising=False)
+        monkeypatch.delattr(builtins, "display", raising=False)
+        import __main__
+
+        monkeypatch.delattr(__main__, "display", raising=False)
+        monkeypatch.setitem(sys.modules, "IPython", None)
+
+        imported = {"runtime": False}
+
+        class _BoomFinder:
+            def find_spec(self, fullname, path, target=None):
+                if fullname == "databricks.sdk.runtime" or fullname.startswith("databricks.sdk.runtime."):
+                    imported["runtime"] = True
+                    raise AssertionError("databricks.sdk.runtime must not be imported off-cluster")
+                return None
+
+        monkeypatch.setattr(sys, "meta_path", [_BoomFinder(), *sys.meta_path])
+        for key in list(sys.modules):
+            if key == "databricks" or key.startswith("databricks."):
+                monkeypatch.delitem(sys.modules, key, raising=False)
+
+        assert utils._resolve_runtime_display() is None
+        assert imported["runtime"] is False
+
+    def test_resolve_uses_sdk_runtime_on_cluster(self, monkeypatch):
+        """On Databricks runtime, databricks.sdk.runtime.display is eligible."""
+        import builtins
+        import sys
+        import types
+
+        from ml_analytics import utils
+
+        monkeypatch.setenv("DATABRICKS_RUNTIME_VERSION", "15.4")
+        monkeypatch.delattr(builtins, "display", raising=False)
+        import __main__
+
+        monkeypatch.delattr(__main__, "display", raising=False)
+        monkeypatch.setitem(sys.modules, "IPython", None)
+
+        fake_display = lambda obj: ("sdk", obj)
+        fake_display.__module__ = "databricks.sdk.runtime"
+
+        runtime_mod = types.ModuleType("databricks.sdk.runtime")
+        runtime_mod.display = fake_display
+        sdk_mod = types.ModuleType("databricks.sdk")
+        sdk_mod.runtime = runtime_mod
+        package_mod = types.ModuleType("databricks")
+        package_mod.sdk = sdk_mod
+        monkeypatch.setitem(sys.modules, "databricks", package_mod)
+        monkeypatch.setitem(sys.modules, "databricks.sdk", sdk_mod)
+        monkeypatch.setitem(sys.modules, "databricks.sdk.runtime", runtime_mod)
+
+        assert utils._resolve_runtime_display() is fake_display
+
+
+class TestGetDbutils:
+    """_get_dbutils must not import databricks.sdk.runtime off-cluster."""
+
+    def test_skips_sdk_runtime_off_cluster(self, monkeypatch):
+        import builtins
+        import sys
+
+        from ml_analytics import utils
+
+        monkeypatch.delenv("DATABRICKS_RUNTIME_VERSION", raising=False)
+        monkeypatch.setattr(utils, "_DBUTILS", None)
+        monkeypatch.setattr(utils, "_DBUTILS_RESOLVED", False)
+        monkeypatch.delattr(builtins, "dbutils", raising=False)
+        import __main__
+
+        monkeypatch.delattr(__main__, "dbutils", raising=False)
+        monkeypatch.setitem(sys.modules, "IPython", None)
+
+        imported = {"runtime": False}
+
+        class _BoomFinder:
+            def find_spec(self, fullname, path, target=None):
+                if fullname == "databricks.sdk.runtime" or fullname.startswith("databricks.sdk.runtime."):
+                    imported["runtime"] = True
+                    raise AssertionError("databricks.sdk.runtime must not be imported off-cluster")
+                return None
+
+        monkeypatch.setattr(sys, "meta_path", [_BoomFinder(), *sys.meta_path])
+        for key in list(sys.modules):
+            if key == "databricks" or key.startswith("databricks."):
+                monkeypatch.delitem(sys.modules, key, raising=False)
+
+        assert utils._get_dbutils() is None
+        assert imported["runtime"] is False
+
+    def test_uses_sdk_runtime_on_cluster(self, monkeypatch):
+        import builtins
+        import sys
+        import types
+
+        from ml_analytics import utils
+
+        monkeypatch.setenv("DATABRICKS_RUNTIME_VERSION", "15.4")
+        monkeypatch.setattr(utils, "_DBUTILS", None)
+        monkeypatch.setattr(utils, "_DBUTILS_RESOLVED", False)
+        monkeypatch.delattr(builtins, "dbutils", raising=False)
+        import __main__
+
+        monkeypatch.delattr(__main__, "dbutils", raising=False)
+        monkeypatch.setitem(sys.modules, "IPython", None)
+
+        fake_dbutils = object()
+        runtime_mod = types.ModuleType("databricks.sdk.runtime")
+        runtime_mod.dbutils = fake_dbutils
+        sdk_mod = types.ModuleType("databricks.sdk")
+        sdk_mod.runtime = runtime_mod
+        package_mod = types.ModuleType("databricks")
+        package_mod.sdk = sdk_mod
+        monkeypatch.setitem(sys.modules, "databricks", package_mod)
+        monkeypatch.setitem(sys.modules, "databricks.sdk", sdk_mod)
+        monkeypatch.setitem(sys.modules, "databricks.sdk.runtime", runtime_mod)
+
+        assert utils._get_dbutils() is fake_dbutils
+
 
 class TestShow:
     def test_closes_under_agg(self, monkeypatch):
