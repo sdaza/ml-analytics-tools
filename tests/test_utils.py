@@ -222,7 +222,7 @@ class TestFormatSqlIgnoringComments:
     def test_literal_braces_in_string_must_be_escaped(self):
         # JSON-style braces in a string get formatted too, so they must be escaped as {{ }}.
         sql = "SELECT '{{\"a\": 1}}' AS j, {n} AS n"
-        assert format_sql_ignoring_comments(sql, n=2) == 'SELECT \'{"a": 1}\' AS j, 2 AS n'
+        assert format_sql_ignoring_comments(sql, n=2) == "SELECT '{\"a\": 1}' AS j, 2 AS n"
 
     def test_escaped_braces_in_code(self):
         # Doubled braces in a code region are unescaped by str.format as usual.
@@ -726,7 +726,9 @@ class TestDisplay:
         monkeypatch.delattr(__main__, "display", raising=False)
         monkeypatch.setitem(sys.modules, "IPython", None)
 
-        fake_display = lambda obj: ("sdk", obj)
+        def fake_display(obj):
+            return ("sdk", obj)
+
         fake_display.__module__ = "databricks.sdk.runtime"
 
         runtime_mod = types.ModuleType("databricks.sdk.runtime")
