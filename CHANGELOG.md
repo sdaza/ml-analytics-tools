@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.8.2](https://github.com/sdaza/ml-analytics-tools/compare/ml-analytics-tools-v0.8.1...ml-analytics-tools-v0.8.2) (2026-07-24)
+
+
+### Bug Fixes
+
+* skip databricks.sdk.runtime import off-cluster ([9c74a1e](https://github.com/sdaza/ml-analytics-tools/commit/9c74a1e166cd2a87e139b273382e32a15bae74ac))
+* skip databricks.sdk.runtime import off-cluster ([7d9a258](https://github.com/sdaza/ml-analytics-tools/commit/7d9a258a59ba62e77b3d3b4ed755ebbc1445f6fc))
+
 ## [0.8.1](https://github.com/sdaza/ml-analytics-tools/compare/ml-analytics-tools-v0.8.0...ml-analytics-tools-v0.8.1) (2026-07-16)
 
 
