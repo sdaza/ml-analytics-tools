@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.9.0](https://github.com/sdaza/ml-analytics-tools/compare/ml-analytics-tools-v0.8.2...ml-analytics-tools-v0.9.0) (2026-08-26)
+
+
+### Features
+
+* let SparkTableManager.sql load .sql files ([b551b3b](https://github.com/sdaza/ml-analytics-tools/commit/b551b3bec7ccb75f6f14f8029aff3e117aa3c7fc))
+* let SparkTableManager.sql load .sql files via shared resolve_sql_query ([485eb4f](https://github.com/sdaza/ml-analytics-tools/commit/485eb4fda2497b66c6eeafb9367507365a690eff))
+
 ## [0.8.2](https://github.com/sdaza/ml-analytics-tools/compare/ml-analytics-tools-v0.8.1...ml-analytics-tools-v0.8.2) (2026-07-24)
 
 
