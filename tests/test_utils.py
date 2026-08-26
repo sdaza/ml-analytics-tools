@@ -9,6 +9,7 @@ from ml_analytics.utils import (
     format_sql_ignoring_comments,
     get_sql_files,
     load_sql_query,
+    resolve_sql_query,
     strip_sql_comments,
 )
 
@@ -185,6 +186,56 @@ class TestLoadSqlQuery:
 
         result = load_sql_query("sql/experiment.sql", start_date="2026-01-01")
         assert result == "-- docs: see {tutor_id} url pattern\nSELECT * FROM t WHERE d = '2026-01-01'"
+
+
+class TestResolveSqlQuery:
+    def test_inline_passthrough_without_kwargs(self):
+        query = "SELECT OBJECT_CONSTRUCT('a', 1) WHERE x = '{not_a_placeholder}'"
+        assert resolve_sql_query(query) == query
+
+    def test_formats_inline_query_with_kwargs(self):
+        resolved = resolve_sql_query(
+            "SELECT * FROM t WHERE d = '{date}' AND id IN ({ids})",
+            date="2025-01-01",
+            ids="1, 2",
+        )
+        assert resolved == "SELECT * FROM t WHERE d = '2025-01-01' AND id IN (1, 2)"
+
+    def test_inline_substitutes_code_but_not_comment(self):
+        query = "-- campaign: exp-target-raf-pilot-{tutor_id}_0_bau\nSELECT * FROM t WHERE d = '{date}'"
+        assert resolve_sql_query(query, date="2025-01-01") == (
+            "-- campaign: exp-target-raf-pilot-{tutor_id}_0_bau\nSELECT * FROM t WHERE d = '2025-01-01'"
+        )
+
+    def test_inline_block_comment_braces_preserved(self):
+        query = "/* docs: url ?campaign={tutor_id} */\nSELECT 1"
+        assert resolve_sql_query(query, tutor_id=99) == query
+
+    def test_inline_bad_template_raises(self):
+        with pytest.raises(ValueError, match="formatting inline SQL"):
+            resolve_sql_query("SELECT '{missing}'", date="2025-01-01")
+
+    def test_loads_sql_file_and_applies_kwargs(self, monkeypatch, tmp_path):
+        sql_file = tmp_path / "q.sql"
+        sql_file.write_text("SELECT {n} AS n")
+        monkeypatch.setattr("ml_analytics.utils.find_project_root", lambda *a, **k: tmp_path)
+        assert resolve_sql_query("q.sql", n=5) == "SELECT 5 AS n"
+
+    def test_strips_whitespace_around_sql_path(self, monkeypatch, tmp_path):
+        sql_file = tmp_path / "q.sql"
+        sql_file.write_text("SELECT 1")
+        monkeypatch.setattr("ml_analytics.utils.find_project_root", lambda *a, **k: tmp_path)
+        assert resolve_sql_query("  q.sql  ") == "SELECT 1"
+
+    def test_missing_file_raises(self, monkeypatch, tmp_path):
+        monkeypatch.setattr("ml_analytics.utils.find_project_root", lambda *a, **k: tmp_path)
+        with pytest.raises(ValueError, match="Could not load SQL file"):
+            resolve_sql_query("missing.sql")
+
+    def test_exported_from_package(self):
+        from ml_analytics import resolve_sql_query as exported
+
+        assert exported is resolve_sql_query
 
 
 class TestFormatSqlIgnoringComments:

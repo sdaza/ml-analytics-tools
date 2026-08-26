@@ -15,7 +15,7 @@ lazily, only when a method that actually needs a Spark session is called. This
 keeps the rest of the package usable in environments without Spark installed.
 """
 
-from .utils import get_logger, log_and_raise_error
+from .utils import get_logger, log_and_raise_error, resolve_sql_query
 
 # Cached Spark session shared across SparkTableManager / SFConnector instances.
 # Populated lazily by get_spark(); never created at import time so the package
@@ -275,7 +275,7 @@ class SparkTableManager:
             log_and_raise_error(self._logger, f"Error dropping Unity Catalog table '{full_name}': {e}")
         self._logger.info(f"Dropped Unity Catalog table '{full_name}'.")
 
-    def sql(self, query: str, return_pandas: bool = False, spark=None):
+    def sql(self, query: str, return_pandas: bool = False, spark=None, **kwargs):
         """
         Run a Spark SQL statement via ``spark.sql(query)`` and return the result.
 
@@ -286,13 +286,20 @@ class SparkTableManager:
         Parameters
         ----------
         query
-            The Spark SQL statement to execute.
+            The Spark SQL statement to execute, or a path to a ``.sql`` file
+            (relative to the project root). When a ``.sql`` path is given, its
+            contents are loaded automatically.
         return_pandas
             If True, return a pandas DataFrame; otherwise return the Spark
             DataFrame. Defaults to False.
         spark
             Optional SparkSession to use. Defaults to this manager's Spark session.
+        **kwargs
+            Template variables substituted into the SQL using ``str.format()``.
+            Substitution is comment- and string-aware, so literal braces in
+            comments or string literals are preserved.
         """
+        query = resolve_sql_query(query, logger=self._logger, **kwargs)
         spark = spark or self._get_spark()
         try:
             df = spark.sql(query)

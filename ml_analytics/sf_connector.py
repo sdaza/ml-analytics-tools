@@ -20,10 +20,9 @@ from .data_connector import (
 )
 from .spark_connector import SparkTableManager, get_spark
 from .utils import (
-    format_sql_ignoring_comments,
     get_logger,
-    load_sql_query,
     log_and_raise_error,
+    resolve_sql_query,
     resolve_sql_query_paths,
 )
 
@@ -242,22 +241,7 @@ class SFConnector:
         documented ``{tutor_id}`` URL patterns) or string payloads are preserved.
         See ``format_sql_ignoring_comments``.
         """
-        if query and query.strip().endswith(".sql"):
-            loaded = load_sql_query(query.strip(), **kwargs)
-            if loaded is None:
-                log_and_raise_error(self._logger, f"Could not load SQL file: {query}")
-            self._logger.info(f"Loaded SQL from file: {query}")
-            return loaded
-        if query and kwargs:
-            try:
-                return format_sql_ignoring_comments(query, **kwargs)
-            except (KeyError, IndexError, ValueError) as e:
-                log_and_raise_error(
-                    self._logger,
-                    f"Error formatting inline SQL query with {sorted(kwargs)}: {e}. "
-                    f"Escape literal braces as '{{{{' / '}}}}' if the SQL is not a template.",
-                )
-        return query
+        return resolve_sql_query(query, logger=self._logger, **kwargs)
 
     @staticmethod
     def _wrap_query_for_connector(query: str) -> str:

@@ -22,6 +22,7 @@ from .utils import (
     get_sql_files,
     load_sql_query,
     log_and_raise_error,
+    resolve_sql_query,
     resolve_sql_query_paths,
     show,
 )
@@ -94,6 +95,7 @@ __all__ = [
     "load_sql_query",
     "log_and_raise_error",
     "ModelManager",
+    "resolve_sql_query",
     "resolve_sql_query_paths",
     "S3Connector",
     "SFConnector",

@@ -837,6 +837,49 @@ def load_sql_query(query_path: str, strip_comments: bool = False, **kwargs) -> s
         return None
 
 
+def resolve_sql_query(query: str, logger=None, **kwargs) -> str:
+    """
+    Resolve a query that may be either inline SQL or a path to a ``.sql`` file.
+
+    If ``query`` ends in ``.sql`` it is loaded via :func:`load_sql_query`,
+    applying ``**kwargs`` as template variables. Otherwise it is treated as
+    inline SQL and returned as-is, except that when ``**kwargs`` are provided
+    they are applied too, so callers don't have to ``query.format(...)``
+    themselves. With no kwargs the string is untouched, so inline SQL containing
+    literal ``{`` / ``}`` (JSON, OBJECT_CONSTRUCT, ...) is left alone.
+
+    Substitution is comment- and string-aware: ``{placeholder}`` tokens are
+    replaced only in actual SQL code, never inside ``--`` / ``/* ... */``
+    comments or quoted string literals. See ``format_sql_ignoring_comments``.
+
+    Args:
+        query: Inline SQL, or a path to a ``.sql`` file.
+        logger: Optional logger used to report load/format failures.
+        **kwargs: Template variables substituted into the SQL.
+
+    Returns:
+        The resolved SQL string.
+    """
+    logger = logger or get_logger("ml_analytics.utils.resolve_sql_query")
+
+    if query and query.strip().endswith(".sql"):
+        loaded = load_sql_query(query.strip(), **kwargs)
+        if loaded is None:
+            log_and_raise_error(logger, f"Could not load SQL file: {query}")
+        logger.info(f"Loaded SQL from file: {query}")
+        return loaded
+    if query and kwargs:
+        try:
+            return format_sql_ignoring_comments(query, **kwargs)
+        except (KeyError, IndexError, ValueError) as e:
+            log_and_raise_error(
+                logger,
+                f"Error formatting inline SQL query with {sorted(kwargs)}: {e}. "
+                f"Escape literal braces as '{{{{' / '}}}}' if the SQL is not a template.",
+            )
+    return query
+
+
 def _split_sql_statements(sql_content: str) -> list[str]:
     """
     Split SQL content into individual statements, respecting comments and string literals.
