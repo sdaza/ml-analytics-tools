@@ -2,7 +2,9 @@
 Generic utility functions for S3 data operations.
 """
 
+import gzip
 import io
+import json
 import os
 import re
 from functools import singledispatchmethod
@@ -15,6 +17,12 @@ import pyarrow as pa
 from botocore.exceptions import ClientError, NoCredentialsError
 
 from .utils import get_logger, log_and_raise_error
+
+# Longer suffixes first so ".json.gz" / ".csv.gz" are not treated as the uncompressed suffix.
+_JSON_SUFFIXES = (".json.gz", ".jsonl.gz", ".ndjson.gz", ".jsonl", ".ndjson", ".json")
+_JSON_LINES_SUFFIXES = (".jsonl.gz", ".ndjson.gz", ".jsonl", ".ndjson")
+_CSV_SUFFIXES = (".csv.gz", ".csv")
+_FILE_SUFFIXES = (".parquet", *_CSV_SUFFIXES, *_JSON_SUFFIXES)
 
 
 class S3Connector:
@@ -408,6 +416,316 @@ class S3Connector:
             except Exception as final_error:
                 log_and_raise_error(self._logger, f"Error reading Parquet file from S3: {final_error}")
 
+    def _list_json_keys(self, bucket: str, prefix: str) -> list[str]:
+        """List JSON file keys under an S3 prefix using the boto3 client."""
+        keys = []
+        paginator = self.s3.get_paginator("list_objects_v2")
+        for page in paginator.paginate(Bucket=bucket, Prefix=prefix):
+            for obj in page.get("Contents", []):
+                key = obj["Key"]
+                if self._is_json_file(key):
+                    keys.append(key)
+        return keys
+
+    @staticmethod
+    def _is_json_file(path: str) -> bool:
+        lower = path.lower().rstrip("/")
+        return any(lower.endswith(suffix) for suffix in _JSON_SUFFIXES)
+
+    @staticmethod
+    def _is_json_lines_file(path: str) -> bool:
+        lower = path.lower().rstrip("/")
+        return any(lower.endswith(suffix) for suffix in _JSON_LINES_SUFFIXES)
+
+    @staticmethod
+    def _strip_trailing_slash_for_file(path: str) -> str:
+        """Drop the trailing slash get_path appends to known file names."""
+        lower = path.lower()
+        for suffix in _FILE_SUFFIXES:
+            if lower.endswith(f"{suffix}/"):
+                return path[:-1]
+        return path
+
+    @staticmethod
+    def _decompress_gzip_bytes(data: bytes, key: str) -> bytes:
+        if key.lower().endswith(".gz") or data.startswith(b"\x1f\x8b"):
+            try:
+                return gzip.decompress(data)
+            except gzip.BadGzipFile as exc:
+                raise ValueError(f"Invalid gzip file '{key}': {exc}") from exc
+        return data
+
+    @staticmethod
+    def _json_value_to_records(value) -> list[dict]:
+        """Turn one JSON value into row records.
+
+        A JSON array becomes one row per element. A JSON object becomes one row.
+        Scalar values are wrapped in a ``value`` column.
+        """
+        if value is None:
+            return []
+        if isinstance(value, list):
+            records = []
+            for item in value:
+                if isinstance(item, dict):
+                    records.append(item)
+                else:
+                    records.append({"value": item})
+            return records
+        if isinstance(value, dict):
+            return [value]
+        return [{"value": value}]
+
+    def _parse_json_lines(self, text: str, key: str) -> list[dict]:
+        records: list[dict] = []
+        for line_no, line in enumerate(text.splitlines(), start=1):
+            stripped = line.strip()
+            if not stripped:
+                continue
+            try:
+                value = json.loads(stripped)
+            except json.JSONDecodeError as exc:
+                raise ValueError(f"Invalid JSON in '{key}' on line {line_no}: {exc}") from exc
+            records.extend(self._json_value_to_records(value))
+        return records
+
+    def _parse_single_json_document(self, text: str, key: str) -> list[dict]:
+        stripped = text.strip()
+        if not stripped:
+            return []
+        try:
+            value = json.loads(stripped)
+        except json.JSONDecodeError as exc:
+            raise ValueError(f"Invalid JSON in '{key}': {exc}") from exc
+        return self._json_value_to_records(value)
+
+    def _parse_json_stream(self, text: str, key: str) -> list[dict]:
+        """Parse one JSON document or several concatenated documents."""
+        decoder = json.JSONDecoder()
+        records: list[dict] = []
+        index = 0
+        length = len(text)
+        while index < length:
+            while index < length and text[index].isspace():
+                index += 1
+            if index >= length:
+                break
+            try:
+                value, end = decoder.raw_decode(text, index)
+            except json.JSONDecodeError as exc:
+                raise ValueError(f"Invalid JSON in '{key}': {exc}") from exc
+            if end <= index:
+                raise ValueError(f"Invalid JSON in '{key}': parser did not advance")
+            records.extend(self._json_value_to_records(value))
+            index = end
+        return records
+
+    def _records_from_json_bytes(self, data: bytes, key: str, lines: bool | None) -> list[dict]:
+        data = self._decompress_gzip_bytes(data, key)
+        try:
+            text = data.decode("utf-8-sig")
+        except UnicodeDecodeError as exc:
+            raise ValueError(f"JSON file '{key}' is not valid UTF-8: {exc}") from exc
+
+        if lines is True or (lines is None and self._is_json_lines_file(key)):
+            return self._parse_json_lines(text, key)
+        if lines is False:
+            return self._parse_single_json_document(text, key)
+        return self._parse_json_stream(text, key)
+
+    @staticmethod
+    def _records_to_frame(records: list[dict], to_polars: bool) -> pd.DataFrame | pl.DataFrame:
+        if to_polars:
+            if not records:
+                return pl.DataFrame()
+            return pl.from_dicts(records, infer_schema_length=None)
+        return pd.DataFrame.from_records(records)
+
+    @staticmethod
+    def _combine_frames(frames: list[pd.DataFrame | pl.DataFrame], to_polars: bool) -> pd.DataFrame | pl.DataFrame:
+        populated = [frame for frame in frames if len(frame) > 0]
+        if not populated:
+            return frames[0]
+        if len(populated) == 1:
+            return populated[0]
+        if to_polars:
+            return pl.concat(populated, how="diagonal_relaxed")
+        return pd.concat(populated, ignore_index=True)
+
+    def _resolve_read_keys(
+        self,
+        file_path: str,
+        bucket: str | None,
+        s3_root: str | None,
+        is_file,
+        list_keys,
+        missing_message: str,
+    ) -> tuple[str, str, list[str]]:
+        """Resolve a file or prefix into the bucket and object keys to read."""
+        if not file_path:
+            log_and_raise_error(self._logger, "No file_path provided")
+
+        bucket = self._resolve_bucket(bucket)
+        if s3_root is None:
+            s3_root = self._s3_root
+
+        resolved = self._strip_trailing_slash_for_file(self.get_path(file_path, s3_root=s3_root, bucket=bucket))
+        bucket_name, key_prefix = self._parse_s3_path(resolved)
+        if is_file(resolved):
+            return bucket_name, resolved, [key_prefix]
+
+        keys = list_keys(bucket_name, key_prefix)
+        if not keys:
+            log_and_raise_error(self._logger, missing_message.format(path=resolved))
+        return bucket_name, resolved, keys
+
+    def read_json(
+        self,
+        file_path: str,
+        bucket: str = None,
+        s3_root: str = None,
+        to_polars: bool = False,
+        lines: bool | None = None,
+    ) -> pd.DataFrame | pl.DataFrame:
+        """
+        Read JSON from S3 and return it as a pandas or polars DataFrame.
+
+        Accepts a single object (``.json``, ``.jsonl``, ``.ndjson``, and gzip
+        variants) or a prefix containing those files. A JSON array becomes one
+        row per element. A JSON object becomes one row. Newline-delimited JSON
+        is read one object per line. Files under a prefix are concatenated.
+
+        Parameters
+        ----------
+        file_path : str
+            S3 key or prefix. File names should end with ``.json``, ``.jsonl``,
+            or ``.ndjson`` (``.gz`` optional). A prefix reads every JSON file below it.
+        bucket : str, optional
+            The S3 bucket name. Defaults to the instance's bucket.
+        s3_root : str, optional
+            The root directory in the S3 bucket. Defaults to the instance's s3_root.
+        to_polars : bool, optional
+            If True, returns a polars DataFrame. If False, returns a pandas DataFrame.
+            Defaults to False.
+        lines : bool, optional
+            If True, parse each file as newline-delimited JSON. If False, parse each
+            file as one JSON document. If omitted, ``.jsonl`` and ``.ndjson`` are read
+            as lines, and ``.json`` accepts either one document or concatenated documents.
+
+        Returns
+        -------
+        Union[pd.DataFrame, pl.DataFrame]
+            The DataFrame read from the JSON file or prefix.
+        """
+        bucket_name, resolved_path, json_keys = self._resolve_read_keys(
+            file_path,
+            bucket,
+            s3_root,
+            self._is_json_file,
+            self._list_json_keys,
+            "No JSON files found under {path}",
+        )
+
+        try:
+            frames = []
+            for key in json_keys:
+                buffer = self._download_s3_to_buffer(bucket_name, key)
+                buffer.seek(0)
+                records = self._records_from_json_bytes(buffer.read(), key, lines)
+                frames.append(self._records_to_frame(records, to_polars))
+            frame = self._combine_frames(frames, to_polars)
+            self._logger.debug("Read %d JSON file(s) from %s into %d row(s)", len(json_keys), resolved_path, len(frame))
+            return frame
+        except Exception as exc:
+            log_and_raise_error(self._logger, f"Error reading JSON file from S3: {exc}")
+
+    def _list_csv_keys(self, bucket: str, prefix: str) -> list[str]:
+        """List CSV file keys under an S3 prefix using the boto3 client."""
+        keys = []
+        paginator = self.s3.get_paginator("list_objects_v2")
+        for page in paginator.paginate(Bucket=bucket, Prefix=prefix):
+            for obj in page.get("Contents", []):
+                key = obj["Key"]
+                if self._is_csv_file(key):
+                    keys.append(key)
+        return keys
+
+    @staticmethod
+    def _is_csv_file(path: str) -> bool:
+        lower = path.lower().rstrip("/")
+        return any(lower.endswith(suffix) for suffix in _CSV_SUFFIXES)
+
+    def _frame_from_csv_bytes(self, data: bytes, key: str, to_polars: bool, sep: str) -> pd.DataFrame | pl.DataFrame:
+        data = self._decompress_gzip_bytes(data, key)
+        try:
+            text = data.decode("utf-8-sig")
+        except UnicodeDecodeError as exc:
+            raise ValueError(f"CSV file '{key}' is not valid UTF-8: {exc}") from exc
+        if not text.strip():
+            raise ValueError(f"CSV file '{key}' is empty")
+        if to_polars:
+            return pl.read_csv(io.BytesIO(text.encode("utf-8")), separator=sep)
+        return pd.read_csv(io.StringIO(text), sep=sep)
+
+    def read_csv(
+        self,
+        file_path: str,
+        bucket: str = None,
+        s3_root: str = None,
+        to_polars: bool = False,
+        sep: str = ",",
+    ) -> pd.DataFrame | pl.DataFrame:
+        """
+        Read CSV from S3 and return it as a pandas or polars DataFrame.
+
+        Accepts a single object (``.csv`` or ``.csv.gz``) or a prefix containing
+        those files. Files under a prefix are concatenated. Gzip is detected from
+        the key suffix or the gzip magic bytes.
+
+        Parameters
+        ----------
+        file_path : str
+            S3 key or prefix. File names should end with ``.csv`` or ``.csv.gz``.
+            A prefix reads every CSV file below it.
+        bucket : str, optional
+            The S3 bucket name. Defaults to the instance's bucket.
+        s3_root : str, optional
+            The root directory in the S3 bucket. Defaults to the instance's s3_root.
+        to_polars : bool, optional
+            If True, returns a polars DataFrame. If False, returns a pandas DataFrame.
+            Defaults to False.
+        sep : str, optional
+            Single-character field separator. Defaults to ``,``.
+
+        Returns
+        -------
+        Union[pd.DataFrame, pl.DataFrame]
+            The DataFrame read from the CSV file or prefix.
+        """
+        if len(sep) != 1:
+            log_and_raise_error(self._logger, "sep must be a single character")
+
+        bucket_name, resolved_path, csv_keys = self._resolve_read_keys(
+            file_path,
+            bucket,
+            s3_root,
+            self._is_csv_file,
+            self._list_csv_keys,
+            "No CSV files found under {path}",
+        )
+
+        try:
+            frames = []
+            for key in csv_keys:
+                buffer = self._download_s3_to_buffer(bucket_name, key)
+                buffer.seek(0)
+                frames.append(self._frame_from_csv_bytes(buffer.read(), key, to_polars, sep))
+            frame = self._combine_frames(frames, to_polars)
+            self._logger.debug("Read %d CSV file(s) from %s into %d row(s)", len(csv_keys), resolved_path, len(frame))
+            return frame
+        except Exception as exc:
+            log_and_raise_error(self._logger, f"Error reading CSV file from S3: {exc}")
+
     # ===== Redshift Type Validation Helper Methods =====
 
     def _get_base_redshift_type(self, type_string: str) -> str:
@@ -750,9 +1068,7 @@ class S3Connector:
             s3_root = self._s3_root
 
         normalized = self._normalize_s3_path(f"{self._s3_prefix}{bucket}/{s3_root}/{relative_path}/")
-        if normalized.endswith(".parquet/") | normalized.endswith(".csv/"):
-            normalized = normalized[:-1]
-        return normalized
+        return self._strip_trailing_slash_for_file(normalized)
 
     def delete_file(self, key=None, bucket=None, s3_root=None):
         """
