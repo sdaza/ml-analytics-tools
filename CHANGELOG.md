@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.10.0](https://github.com/sdaza/ml-analytics-tools/compare/ml-analytics-tools-v0.9.0...ml-analytics-tools-v0.10.0) (2026-10-08)
+
+
+### Features
+
+* read JSON and CSV files from S3 ([cbb0d0f](https://github.com/sdaza/ml-analytics-tools/commit/cbb0d0ffb65216234c640b638e42677a41ed3a1c))
+* read JSON and CSV files from S3 ([04a098f](https://github.com/sdaza/ml-analytics-tools/commit/04a098fea593b4fd86ea31986c8c38c5ac7fe672))
+
 ## [0.9.0](https://github.com/sdaza/ml-analytics-tools/compare/ml-analytics-tools-v0.8.2...ml-analytics-tools-v0.9.0) (2026-08-26)
 
 
